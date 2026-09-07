@@ -1,0 +1,19 @@
+[Unit]
+Description=CLI Agent Dispatch Gateway (FastMCP & OpenAI Bridge)
+After=network.target
+
+[Service]
+Type=simple
+User=steve
+Group=steve
+WorkingDirectory=/containers/dev/CLIAgentDispatch
+Environment=PYTHONUNBUFFERED=1
+Environment=PORT=8032
+Environment=HOST=0.0.0.0
+Environment=PATH=/containers/dev/CLIAgentDispatch/.venv/bin:/home/steve/.local/bin:/home/steve/.nvm/versions/node/v22.17.0/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/containers/dev/CLIAgentDispatch/.venv/bin/cli-agent-dispatch serve --port 8032 --host 0.0.0.0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
