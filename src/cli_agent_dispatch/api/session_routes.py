@@ -38,32 +38,33 @@ async def investigate(request: InvestigationRequest) -> InvestigationResult:
             f"Error during SRE investigation for target '{request.target}': {e}",
             exc_info=True,
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/sessions")
 async def create_session(
-    request: SessionCreateRequest = SessionCreateRequest(),
+    request: SessionCreateRequest | None = None,
 ) -> dict[str, str | None]:
     """Initializes a new interactive session via the requested executor."""
-    prompt = request.prompt or "Initialize session"
+    req = request or SessionCreateRequest()
+    prompt = req.prompt or "Initialize session"
     task_req = TaskRequest(
         prompt=prompt,
-        executor=request.executor,
-        system_prompt=request.system_prompt,
-        workspace=request.workspace,
-        model=request.model,
-        provider=request.provider,
-        timeout=request.timeout,
+        executor=req.executor,
+        system_prompt=req.system_prompt,
+        workspace=req.workspace,
+        model=req.model,
+        provider=req.provider,
+        timeout=req.timeout,
     )
     try:
         result = await engine.dispatch(task_req)
     except Exception as e:
         logger.error(
-            f"Failed to create session via executor '{request.executor}': {e}",
+            f"Failed to create session via executor '{req.executor}': {e}",
             exc_info=True,
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     if not result.success:
         raise HTTPException(
@@ -98,10 +99,10 @@ async def send_session_message(
     try:
         return await engine.dispatch(task_req)
     except ExecutorNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         logger.error(
             f"Failed to dispatch message for session '{session_id}' via '{target_executor}': {e}",
             exc_info=True,
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
