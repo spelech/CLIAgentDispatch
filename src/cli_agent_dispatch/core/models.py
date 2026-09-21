@@ -189,8 +189,8 @@ class SessionMessageRequest(BaseModel):
     def validate_message_content(self) -> "SessionMessageRequest":
         if not self.prompt and self.message:
             self.prompt = self.message
-        if not self.prompt:
-            raise ValueError("Either 'prompt' or 'message' must be provided.")
+        if not self.prompt or not self.prompt.strip():
+            raise ValueError("Either 'prompt' or 'message' must be provided and non-empty.")
         return self
 
 

@@ -18,11 +18,20 @@ logger = logging.getLogger("CLIAgentDispatch.SessionRoutes")
 
 router = APIRouter(prefix="/v1", tags=["Sessions & SRE"])
 
+_SESSION_EXECUTORS: dict[str, ExecutorType] = {}
+
+
+def register_session_executor(session_id: str | None, executor: ExecutorType) -> None:
+    if session_id:
+        _SESSION_EXECUTORS[session_id] = executor
+
 
 def _resolve_session_executor(session_id: str, executor: ExecutorType | None) -> ExecutorType:
     """Infers the target executor from session ID if not explicitly specified."""
     if executor:
         return executor
+    if session_id in _SESSION_EXECUTORS:
+        return _SESSION_EXECUTORS[session_id]
     if session_id.startswith("conv_") or "agy" in session_id.lower():
         return ExecutorType.AGY
     return ExecutorType.OPENCODE
@@ -32,7 +41,10 @@ def _resolve_session_executor(session_id: str, executor: ExecutorType | None) ->
 async def investigate(request: InvestigationRequest) -> InvestigationResult:
     """Executes an interactive SRE investigation session for a target failure."""
     try:
-        return await engine.investigate(request)
+        result = await engine.investigate(request)
+        if result.session_id:
+            register_session_executor(result.session_id, ExecutorType(result.executor))
+        return result
     except Exception as e:
         logger.error(
             f"Error during SRE investigation for target '{request.target}': {e}",
@@ -71,6 +83,9 @@ async def create_session(
             status_code=500,
             detail=result.error or "Failed to initialize session",
         )
+
+    if result.session_id:
+        register_session_executor(result.session_id, ExecutorType(result.executor))
 
     return {
         "session_id": result.session_id,
