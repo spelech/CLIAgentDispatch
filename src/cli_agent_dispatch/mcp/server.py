@@ -36,9 +36,7 @@ async def delegate_task_tool(
     Returns:
         The raw agent execution output, diffs, or error diagnostics.
     """
-    exec_type = (
-        ExecutorType.AGY if executor.lower() == "agy" else ExecutorType.OPENCODE
-    )
+    exec_type = ExecutorType.AGY if executor.lower() == "agy" else ExecutorType.OPENCODE
     req = TaskRequest(
         prompt=prompt,
         executor=exec_type,

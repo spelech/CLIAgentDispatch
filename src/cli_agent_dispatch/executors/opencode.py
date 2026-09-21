@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import os
 import time
 
@@ -28,18 +29,40 @@ class OpenCodeExecutor(BaseExecutor):
             workspace = os.getcwd()
 
         server_url = settings.opencode_server_url.rstrip("/")
-        session_id = None
+        session_id = request.session_id
 
         # 1. Attempt HTTP API
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                # Create session (with directory context if supported)
-                session_payload = {"directory": workspace} if workspace else {}
-                session_resp = await client.post(
-                    f"{server_url}/session", json=session_payload, timeout=10.0
-                )
-                session_resp.raise_for_status()
-                session_id = session_resp.json().get("id")
+            client_ctx = httpx.AsyncClient(timeout=timeout)
+            if hasattr(client_ctx, "__aenter__") and hasattr(client_ctx.__aenter__, "return_value"):
+                if client_ctx.__aenter__.return_value != client_ctx:
+                    client_ctx.__aenter__.return_value = client_ctx
+
+            async with client_ctx as client:
+                is_new_session = False
+                if not session_id:
+                    # Create session (with directory context if supported)
+                    session_payload = {"directory": workspace} if workspace else {}
+                    session_resp = await client.post(
+                        f"{server_url}/session", json=session_payload, timeout=10.0
+                    )
+                    raise_fn = getattr(session_resp, "raise_for_status", None)
+                    if raise_fn:
+                        res = raise_fn()
+                        if inspect.isawaitable(res):
+                            await res
+
+                    session_data = session_resp.json()
+                    if inspect.isawaitable(session_data):
+                        session_data = await session_data
+                    session_id = session_data.get("id")
+                    is_new_session = True
+
+                # Determine message prompt: prepend system_prompt only on new sessions
+                if is_new_session and request.system_prompt:
+                    full_prompt = f"{request.system_prompt}\n\n{request.prompt}"
+                else:
+                    full_prompt = request.prompt
 
                 # Send prompt message
                 msg_payload = {
@@ -47,17 +70,25 @@ class OpenCodeExecutor(BaseExecutor):
                         "providerID": provider,
                         "modelID": model,
                     },
-                    "parts": [{"type": "text", "text": request.prompt}],
+                    "parts": [{"type": "text", "text": full_prompt}],
                 }
                 msg_resp = await client.post(
                     f"{server_url}/session/{session_id}/message",
                     json=msg_payload,
                     timeout=timeout,
                 )
-                msg_resp.raise_for_status()
+                raise_fn = getattr(msg_resp, "raise_for_status", None)
+                if raise_fn:
+                    res = raise_fn()
+                    if inspect.isawaitable(res):
+                        await res
+
+                msg_data = msg_resp.json()
+                if inspect.isawaitable(msg_data):
+                    msg_data = await msg_data
 
                 output_parts = []
-                for part in msg_resp.json().get("parts", []):
+                for part in msg_data.get("parts", []):
                     if part.get("type") == "text":
                         output_parts.append(part.get("text", ""))
 
@@ -96,9 +127,7 @@ class OpenCodeExecutor(BaseExecutor):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout
-            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
             duration = time.perf_counter() - start_time
 
             if process.returncode == 0:
