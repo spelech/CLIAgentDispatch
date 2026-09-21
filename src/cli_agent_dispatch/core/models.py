@@ -96,6 +96,9 @@ class InvestigationResult(BaseModel):
         default=None, description="Active session ID for follow-up turns."
     )
     target: str = Field(..., description="Target service or container investigated.")
+    executor: str | None = Field(
+        default=None, description="Executor engine used for the investigation."
+    )
     root_cause: str = Field(
         default="", description="Diagnosed root cause."
     )
