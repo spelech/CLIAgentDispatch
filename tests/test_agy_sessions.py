@@ -7,6 +7,14 @@ from cli_agent_dispatch.core.models import TaskRequest
 from cli_agent_dispatch.executors.agy import AgyExecutor
 
 
+@pytest.fixture(autouse=True)
+def mock_agy_path(monkeypatch, tmp_path):
+    fake_agy = tmp_path / "agy"
+    fake_agy.write_text("#!/bin/sh\n")
+    fake_agy.chmod(0o755)
+    monkeypatch.setattr("cli_agent_dispatch.executors.agy.settings.agy_path", str(fake_agy))
+
+
 @pytest.mark.asyncio
 async def test_agy_uses_conversation_flag_when_session_id_provided():
     executor = AgyExecutor()
