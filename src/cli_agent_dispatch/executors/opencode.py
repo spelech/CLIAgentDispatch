@@ -127,9 +127,7 @@ class OpenCodeExecutor(BaseExecutor):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout
-            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
             duration = time.perf_counter() - start_time
 
             if process.returncode == 0:

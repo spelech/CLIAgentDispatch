@@ -1,5 +1,6 @@
 import pytest
 from pydantic import ValidationError
+
 from cli_agent_dispatch.core.models import (
     ExecutorType,
     InvestigationRequest,

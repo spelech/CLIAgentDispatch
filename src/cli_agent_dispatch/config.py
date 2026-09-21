@@ -18,33 +18,21 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # OpenCode Configuration
-    opencode_server_url: str = Field(
-        default="http://localhost:4096", alias="OPENCODE_SERVER_URL"
-    )
+    opencode_server_url: str = Field(default="http://localhost:4096", alias="OPENCODE_SERVER_URL")
     opencode_cli_path: str = Field(
         default=os.path.expanduser("~/.nvm/versions/node/v22.17.0/bin/opencode"),
         alias="OPENCODE_PATH",
     )
-    opencode_default_model: str = Field(
-        default="qwen3.7-flash", alias="OPENCODE_MODEL_ID"
-    )
-    opencode_default_provider: str = Field(
-        default="litellm", alias="OPENCODE_PROVIDER_ID"
-    )
+    opencode_default_model: str = Field(default="qwen3.7-flash", alias="OPENCODE_MODEL_ID")
+    opencode_default_provider: str = Field(default="litellm", alias="OPENCODE_PROVIDER_ID")
 
     # Antigravity (agy) Configuration
-    agy_path: str = Field(
-        default=os.path.expanduser("~/.local/bin/agy"), alias="AGY_PATH"
-    )
-    agy_default_model: str = Field(
-        default="Gemini 3.8 Flash (Low)", alias="AGY_MODEL"
-    )
+    agy_path: str = Field(default=os.path.expanduser("~/.local/bin/agy"), alias="AGY_PATH")
+    agy_default_model: str = Field(default="Gemini 3.8 Flash (Low)", alias="AGY_MODEL")
 
     # Execution Defaults
     default_timeout: int = Field(default=180, alias="DEFAULT_TIMEOUT")
-    default_workspace: str = Field(
-        default="/containers", alias="DEFAULT_WORKSPACE"
-    )
+    default_workspace: str = Field(default="/containers", alias="DEFAULT_WORKSPACE")
     cors_origins: list[str] = ["*"]
 
 

@@ -68,9 +68,7 @@ async def test_investigate_endpoint_error_handling(async_client):
         new_callable=AsyncMock,
     ) as mock_inv:
         mock_inv.side_effect = RuntimeError("Investigate engine failed")
-        resp = await async_client.post(
-            "/v1/investigate", json={"target": "radarr4k"}
-        )
+        resp = await async_client.post("/v1/investigate", json={"target": "radarr4k"})
         assert resp.status_code == 500
         assert "Investigate engine failed" in resp.json()["detail"]
 
@@ -254,9 +252,7 @@ async def test_send_session_message_not_found_executor(async_client):
         new_callable=AsyncMock,
     ) as mock_dispatch:
         mock_dispatch.side_effect = ExecutorNotFoundError("Executor not found")
-        resp = await async_client.post(
-            "/v1/sessions/sess_123/message", json={"prompt": "Hello"}
-        )
+        resp = await async_client.post("/v1/sessions/sess_123/message", json={"prompt": "Hello"})
         assert resp.status_code == 404
         assert "Executor not found" in resp.json()["detail"]
 
@@ -268,8 +264,6 @@ async def test_send_session_message_exception_handling(async_client):
         new_callable=AsyncMock,
     ) as mock_dispatch:
         mock_dispatch.side_effect = RuntimeError("Unexpected dispatch failure")
-        resp = await async_client.post(
-            "/v1/sessions/sess_123/message", json={"prompt": "Hello"}
-        )
+        resp = await async_client.post("/v1/sessions/sess_123/message", json={"prompt": "Hello"})
         assert resp.status_code == 500
         assert "Unexpected dispatch failure" in resp.json()["detail"]

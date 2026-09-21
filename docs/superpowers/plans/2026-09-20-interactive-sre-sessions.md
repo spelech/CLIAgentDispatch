@@ -45,20 +45,22 @@ from cli_agent_dispatch.core.models import (
     InvestigationResult,
     SessionCreateRequest,
     SessionMessageRequest,
-    ExecutorType
+    ExecutorType,
 )
+
 
 def test_task_request_accepts_session_id():
     req = TaskRequest(prompt="Inspect logs", session_id="ses_12345", system_prompt="Be an SRE")
     assert req.session_id == "ses_12345"
     assert req.system_prompt == "Be an SRE"
 
+
 def test_investigation_request_and_result():
     inv_req = InvestigationRequest(
         target="radarr4k",
         exit_code=1,
         error_logs="FATAL database locked",
-        workspace="/containers/media_content"
+        workspace="/containers/media_content",
     )
     assert inv_req.target == "radarr4k"
     assert inv_req.max_turns == 5
@@ -72,7 +74,7 @@ def test_investigation_request_and_result():
         category="database_error",
         turns_used=2,
         duration_seconds=3.5,
-        transcript=[]
+        transcript=[],
     )
     assert res.success is True
 ```
@@ -115,13 +117,12 @@ from unittest.mock import AsyncMock, patch
 from cli_agent_dispatch.core.models import TaskRequest
 from cli_agent_dispatch.executors.opencode import OpenCodeExecutor
 
+
 @pytest.mark.asyncio
 async def test_opencode_reuses_existing_session_id():
     executor = OpenCodeExecutor()
     req = TaskRequest(
-        prompt="Second turn message",
-        session_id="existing_session_999",
-        executor="opencode"
+        prompt="Second turn message", session_id="existing_session_999", executor="opencode"
     )
 
     mock_client = AsyncMock()
@@ -183,23 +184,22 @@ from unittest.mock import AsyncMock, patch
 from cli_agent_dispatch.core.models import TaskRequest
 from cli_agent_dispatch.executors.agy.py import AgyExecutor
 
+
 @pytest.mark.asyncio
 async def test_agy_uses_conversation_flag_when_session_id_provided():
     executor = AgyExecutor()
-    req = TaskRequest(
-        prompt="Second turn message",
-        session_id="conv_xyz_123",
-        executor="agy"
-    )
+    req = TaskRequest(prompt="Second turn message", session_id="conv_xyz_123", executor="agy")
 
     mock_process = AsyncMock()
     mock_process.returncode = 0
-    json_output = json.dumps({
-        "conversation_id": "conv_xyz_123",
-        "status": "SUCCESS",
-        "response": "Agy turn 2 reply",
-        "num_turns": 2
-    }).encode("utf-8")
+    json_output = json.dumps(
+        {
+            "conversation_id": "conv_xyz_123",
+            "status": "SUCCESS",
+            "response": "Agy turn 2 reply",
+            "num_turns": 2,
+        }
+    ).encode("utf-8")
     mock_process.communicate.return_value = (json_output, b"")
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
@@ -256,11 +256,10 @@ git commit -m "feat(agy): parse JSON output and support --conversation resumptio
 from cli_agent_dispatch.core.models import InvestigationRequest
 from cli_agent_dispatch.core.sre_prompts import build_investigation_prompt, MCG_READ_ONLY_DIRECTIVE
 
+
 def test_sre_prompt_contains_strict_mcg_read_only_directive():
     req = InvestigationRequest(
-        target="matter-hub",
-        exit_code="1",
-        error_logs="FATAL websocket connection refused"
+        target="matter-hub", exit_code="1", error_logs="FATAL websocket connection refused"
     )
     prompt = build_investigation_prompt(req)
     assert MCG_READ_ONLY_DIRECTIVE in prompt
@@ -327,14 +326,14 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 from cli_agent_dispatch.main import app
 
+
 @pytest.mark.asyncio
 async def test_api_investigate_endpoint():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.post("/v1/investigate", json={
-            "target": "frigate",
-            "exit_code": 1,
-            "error_logs": "FFmpeg exited with code 1"
-        })
+        resp = await ac.post(
+            "/v1/investigate",
+            json={"target": "frigate", "exit_code": 1, "error_logs": "FFmpeg exited with code 1"},
+        )
     assert resp.status_code in [200, 500]
 ```
 

@@ -136,9 +136,7 @@ class DispatchEngine:
         )
         result = await executor.execute(request)
         if result.success:
-            logger.info(
-                f"Task succeeded via '{executor.name}' in {result.duration_seconds}s"
-            )
+            logger.info(f"Task succeeded via '{executor.name}' in {result.duration_seconds}s")
         else:
             logger.warning(
                 f"Task failed via '{executor.name}' in {result.duration_seconds}s: {result.error}"
@@ -180,23 +178,27 @@ class DispatchEngine:
                 f"executor='{executor_name}', session_id='{session_id}'"
             )
 
-            transcript.append({
-                "role": "user",
-                "content": current_prompt,
-                "turn": turn_idx,
-            })
+            transcript.append(
+                {
+                    "role": "user",
+                    "content": current_prompt,
+                    "turn": turn_idx,
+                }
+            )
 
             result = await self.dispatch(task_req)
             raw_output = result.output or ""
             if result.session_id:
                 session_id = result.session_id
 
-            transcript.append({
-                "role": "assistant",
-                "content": raw_output,
-                "turn": turn_idx,
-                "error": result.error,
-            })
+            transcript.append(
+                {
+                    "role": "assistant",
+                    "content": raw_output,
+                    "turn": turn_idx,
+                    "error": result.error,
+                }
+            )
 
             if not result.success:
                 elapsed = time.perf_counter() - start_time
@@ -319,4 +321,3 @@ async def investigate_target(
         session_id=session_id,
     )
     return await engine.investigate(req)
-

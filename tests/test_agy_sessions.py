@@ -18,12 +18,14 @@ async def test_agy_uses_conversation_flag_when_session_id_provided():
 
     mock_process = AsyncMock()
     mock_process.returncode = 0
-    json_output = json.dumps({
-        "conversation_id": "conv_xyz_123",
-        "status": "SUCCESS",
-        "response": "Agy turn 2 reply",
-        "num_turns": 2,
-    }).encode("utf-8")
+    json_output = json.dumps(
+        {
+            "conversation_id": "conv_xyz_123",
+            "status": "SUCCESS",
+            "response": "Agy turn 2 reply",
+            "num_turns": 2,
+        }
+    ).encode("utf-8")
     mock_process.communicate.return_value = (json_output, b"")
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
@@ -53,12 +55,14 @@ async def test_agy_turn_1_creates_session_and_parses_json():
 
     mock_process = AsyncMock()
     mock_process.returncode = 0
-    json_output = json.dumps({
-        "conversation_id": "conv_new_456",
-        "status": "SUCCESS",
-        "response": "First turn reply",
-        "num_turns": 1,
-    }).encode("utf-8")
+    json_output = json.dumps(
+        {
+            "conversation_id": "conv_new_456",
+            "status": "SUCCESS",
+            "response": "First turn reply",
+            "num_turns": 1,
+        }
+    ).encode("utf-8")
     mock_process.communicate.return_value = (json_output, b"")
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
@@ -85,10 +89,12 @@ async def test_agy_prepends_system_prompt_on_turn_1():
 
     mock_process = AsyncMock()
     mock_process.returncode = 0
-    json_output = json.dumps({
-        "conversation_id": "conv_sre_789",
-        "response": "Starting investigation",
-    }).encode("utf-8")
+    json_output = json.dumps(
+        {
+            "conversation_id": "conv_sre_789",
+            "response": "Starting investigation",
+        }
+    ).encode("utf-8")
     mock_process.communicate.return_value = (json_output, b"")
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
@@ -111,15 +117,18 @@ async def test_agy_does_not_reinject_system_prompt_on_subsequent_turns():
 
     mock_process = AsyncMock()
     mock_process.returncode = 0
-    json_output = json.dumps({
-        "conversation_id": "conv_existing_111",
-        "response": "Step output",
-    }).encode("utf-8")
+    json_output = json.dumps(
+        {
+            "conversation_id": "conv_existing_111",
+            "response": "Step output",
+        }
+    ).encode("utf-8")
     mock_process.communicate.return_value = (json_output, b"")
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
         result = await executor.execute(req)
 
+    assert result.session_id == "conv_existing_111"
     args = mock_exec.call_args[0]
     assert "--conversation" in args
     assert "conv_existing_111" in args
@@ -176,7 +185,9 @@ async def test_agy_general_exception():
         executor="agy",
     )
 
-    with patch("asyncio.create_subprocess_exec", side_effect=RuntimeError("Subprocess failed to spawn")):
+    with patch(
+        "asyncio.create_subprocess_exec", side_effect=RuntimeError("Subprocess failed to spawn")
+    ):
         result = await executor.execute(req)
 
     assert result.success is False
@@ -202,4 +213,3 @@ async def test_agy_nonexistent_workspace_fallback():
 
     assert result.success is True
     assert mock_exec.call_args[1]["cwd"] != "/path/that/does/not/exist/for/sure"
-

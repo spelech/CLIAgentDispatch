@@ -6,9 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class DiagnosticEvent(BaseModel):
-    timestamp: str = Field(
-        default_factory=lambda: datetime.utcnow().isoformat()
-    )
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
     event_type: str
     executor: str
     duration_seconds: float = 0.0

@@ -20,9 +20,7 @@ logger = logging.getLogger("CLIAgentDispatch")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(
-        f"Starting {settings.app_name} v{settings.app_version} on port {settings.port}"
-    )
+    logger.info(f"Starting {settings.app_name} v{settings.app_version} on port {settings.port}")
     yield
     logger.info(f"Shutting down {settings.app_name}")
 

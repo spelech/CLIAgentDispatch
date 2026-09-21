@@ -60,12 +60,8 @@ class TaskResult(BaseModel):
 
 class InvestigationRequest(BaseModel):
     target: str = Field(..., description="Target service, container, or component name.")
-    exit_code: str | int | None = Field(
-        default=None, description="Exit code or error status code."
-    )
-    error_logs: str = Field(
-        default="", description="Error logs or failure output to investigate."
-    )
+    exit_code: str | int | None = Field(default=None, description="Exit code or error status code.")
+    error_logs: str = Field(default="", description="Error logs or failure output to investigate.")
     workspace: str | None = Field(
         default=None, description="Working directory for code and file operations."
     )
@@ -73,18 +69,10 @@ class InvestigationRequest(BaseModel):
         default=ExecutorType.OPENCODE,
         description="Target executor engine ('opencode' or 'agy').",
     )
-    max_turns: int = Field(
-        default=5, description="Maximum number of diagnostic turns allowed."
-    )
-    model: str | None = Field(
-        default=None, description="Override model ID."
-    )
-    provider: str | None = Field(
-        default=None, description="Provider ID."
-    )
-    timeout: int | None = Field(
-        default=None, description="Timeout in seconds per turn."
-    )
+    max_turns: int = Field(default=5, description="Maximum number of diagnostic turns allowed.")
+    model: str | None = Field(default=None, description="Override model ID.")
+    provider: str | None = Field(default=None, description="Provider ID.")
+    timeout: int | None = Field(default=None, description="Timeout in seconds per turn.")
     session_id: str | None = Field(
         default=None, description="Optional existing session ID to resume."
     )
@@ -99,30 +87,18 @@ class InvestigationResult(BaseModel):
     executor: str | None = Field(
         default=None, description="Executor engine used for the investigation."
     )
-    root_cause: str = Field(
-        default="", description="Diagnosed root cause."
-    )
-    proposed_fix: str = Field(
-        default="", description="Remediation bash commands or proposed fix."
-    )
-    category: str = Field(
-        default="unknown", description="Issue category classification."
-    )
-    turns_used: int = Field(
-        default=1, description="Number of turns used in the investigation."
-    )
+    root_cause: str = Field(default="", description="Diagnosed root cause.")
+    proposed_fix: str = Field(default="", description="Remediation bash commands or proposed fix.")
+    category: str = Field(default="unknown", description="Issue category classification.")
+    turns_used: int = Field(default=1, description="Number of turns used in the investigation.")
     duration_seconds: float = Field(
         default=0.0, description="Total investigation duration in seconds."
     )
     transcript: list[dict[str, Any]] = Field(
         default_factory=list, description="Transcript of interaction turns."
     )
-    error: str | None = Field(
-        default=None, description="Error message if investigation failed."
-    )
-    raw_output: str | None = Field(
-        default=None, description="Raw model text output."
-    )
+    error: str | None = Field(default=None, description="Error message if investigation failed.")
+    raw_output: str | None = Field(default=None, description="Raw model text output.")
 
 
 # --- Interactive Session Schemas ---
@@ -145,15 +121,9 @@ class SessionCreateRequest(BaseModel):
     workspace: str | None = Field(
         default=None, description="Working directory for code and file operations."
     )
-    model: str | None = Field(
-        default=None, description="Override model ID."
-    )
-    provider: str | None = Field(
-        default=None, description="Provider ID."
-    )
-    timeout: int | None = Field(
-        default=None, description="Timeout in seconds."
-    )
+    model: str | None = Field(default=None, description="Override model ID.")
+    provider: str | None = Field(default=None, description="Provider ID.")
+    timeout: int | None = Field(default=None, description="Timeout in seconds.")
 
     @model_validator(mode="after")
     def populate_prompt(self) -> "SessionCreateRequest":
@@ -166,24 +136,16 @@ class SessionMessageRequest(BaseModel):
     prompt: str | None = Field(
         default=None, description="Message or instructions for the active session."
     )
-    message: str | None = Field(
-        default=None, description="Alternative field for message."
-    )
+    message: str | None = Field(default=None, description="Alternative field for message.")
     executor: ExecutorType | None = Field(
         default=None, description="Override executor engine if needed."
     )
     workspace: str | None = Field(
         default=None, description="Working directory for code and file operations."
     )
-    model: str | None = Field(
-        default=None, description="Override model ID."
-    )
-    provider: str | None = Field(
-        default=None, description="Provider ID."
-    )
-    timeout: int | None = Field(
-        default=None, description="Timeout in seconds."
-    )
+    model: str | None = Field(default=None, description="Override model ID.")
+    provider: str | None = Field(default=None, description="Provider ID.")
+    timeout: int | None = Field(default=None, description="Timeout in seconds.")
 
     @model_validator(mode="after")
     def validate_message_content(self) -> "SessionMessageRequest":

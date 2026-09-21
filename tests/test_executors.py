@@ -19,9 +19,7 @@ async def test_opencode_http_success():
     mock_session_resp.raise_for_status = MagicMock()
 
     mock_msg_resp = MagicMock()
-    mock_msg_resp.json.return_value = {
-        "parts": [{"type": "text", "text": "Hello from OpenCode!"}]
-    }
+    mock_msg_resp.json.return_value = {"parts": [{"type": "text", "text": "Hello from OpenCode!"}]}
     mock_msg_resp.raise_for_status = MagicMock()
 
     with patch("httpx.AsyncClient.post", side_effect=[mock_session_resp, mock_msg_resp]):
@@ -42,8 +40,10 @@ async def test_opencode_http_fail_cli_fallback_success(tmp_path):
     fake_cli.write_text("#!/bin/sh\necho 'CLI output'")
     fake_cli.chmod(0o755)
 
-    with patch("cli_agent_dispatch.executors.opencode.settings.opencode_cli_path", str(fake_cli)), \
-         patch("httpx.AsyncClient.post", side_effect=Exception("HTTP connection refused")):
+    with (
+        patch("cli_agent_dispatch.executors.opencode.settings.opencode_cli_path", str(fake_cli)),
+        patch("httpx.AsyncClient.post", side_effect=Exception("HTTP connection refused")),
+    ):
         result = await executor.execute(req)
 
     assert result.success is True
@@ -83,8 +83,10 @@ async def test_opencode_cli_timeout(tmp_path):
     fake_cli.write_text("#!/bin/sh\nsleep 10")
     fake_cli.chmod(0o755)
 
-    with patch("cli_agent_dispatch.executors.opencode.settings.opencode_cli_path", str(fake_cli)), \
-         patch("httpx.AsyncClient.post", side_effect=Exception("HTTP failed")):
+    with (
+        patch("cli_agent_dispatch.executors.opencode.settings.opencode_cli_path", str(fake_cli)),
+        patch("httpx.AsyncClient.post", side_effect=Exception("HTTP failed")),
+    ):
         result = await executor.execute(req)
 
     assert result.success is False

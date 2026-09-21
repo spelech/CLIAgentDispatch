@@ -1,6 +1,7 @@
-import pytest
-import httpx
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from cli_agent_dispatch.core.models import TaskRequest
 from cli_agent_dispatch.executors.opencode import OpenCodeExecutor
 
@@ -139,8 +140,10 @@ async def test_opencode_session_http_fail_cli_fallback(tmp_path):
         workspace=str(tmp_path),
     )
 
-    with patch("cli_agent_dispatch.executors.opencode.settings.opencode_cli_path", str(fake_cli)), \
-         patch("httpx.AsyncClient.post", side_effect=Exception("HTTP error")):
+    with (
+        patch("cli_agent_dispatch.executors.opencode.settings.opencode_cli_path", str(fake_cli)),
+        patch("httpx.AsyncClient.post", side_effect=Exception("HTTP error")),
+    ):
         result = await executor.execute(req)
 
     assert result.success is True

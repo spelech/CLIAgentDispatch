@@ -1,10 +1,10 @@
 import json
 from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from cli_agent_dispatch.core.engine import DispatchEngine
 from cli_agent_dispatch.core.models import (
-    ExecutorType,
     InvestigationRequest,
     InvestigationResult,
     TaskRequest,
@@ -17,11 +17,16 @@ from cli_agent_dispatch.core.sre_prompts import (
 
 
 def test_sre_prompt_contains_strict_mcg_read_only_directive():
-    assert "=== CRITICAL MODEL CONTEXT GATEWAY (MCG) SAFETY DIRECTIVE ===" in MCG_READ_ONLY_DIRECTIVE
+    assert (
+        "=== CRITICAL MODEL CONTEXT GATEWAY (MCG) SAFETY DIRECTIVE ===" in MCG_READ_ONLY_DIRECTIVE
+    )
     assert "STRICTLY CONFINED to READ-ONLY inspection" in MCG_READ_ONLY_DIRECTIVE
     assert "search_tools" in MCG_READ_ONLY_DIRECTIVE
     assert "execute_tool" in MCG_READ_ONLY_DIRECTIVE
-    assert "DO NOT execute mutating, editing, restarting, creating, or deleting" in MCG_READ_ONLY_DIRECTIVE
+    assert (
+        "DO NOT execute mutating, editing, restarting, creating, or deleting"
+        in MCG_READ_ONLY_DIRECTIVE
+    )
     assert "All proposed fixes must be returned as clean bash commands" in MCG_READ_ONLY_DIRECTIVE
 
     req = InvestigationRequest(
@@ -178,7 +183,10 @@ async def test_investigate_fallback_on_unstructured_output():
 
     assert result.success is True
     assert "corrupted" in result.root_cause or "home-assistant_v2.db" in result.root_cause
-    assert "docker compose restart homeassistant" in result.proposed_fix or "rm -f" in result.proposed_fix
+    assert (
+        "docker compose restart homeassistant" in result.proposed_fix
+        or "rm -f" in result.proposed_fix
+    )
     assert result.category in ["storage", "unknown"]
     assert result.raw_output == unstructured_text
 
@@ -243,4 +251,3 @@ async def test_investigate_target_convenience_function():
     assert result.root_cause == "Configuration syntax error in compose file"
     assert result.proposed_fix == "docker compose config"
     assert result.category == "configuration"
-

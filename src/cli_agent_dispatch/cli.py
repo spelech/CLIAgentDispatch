@@ -25,9 +25,7 @@ def run(
         "-w",
         help="Target workspace path",
     ),
-    model: str = typer.Option(
-        None, "--model", "-m", help="Model override ID"
-    ),
+    model: str = typer.Option(None, "--model", "-m", help="Model override ID"),
     timeout: int = typer.Option(
         settings.default_timeout, "--timeout", "-t", help="Timeout in seconds"
     ),
@@ -54,15 +52,9 @@ def run(
 
 @app.command()
 def serve(
-    host: str = typer.Option(
-        settings.host, "--host", "-h", help="Bind host address"
-    ),
-    port: int = typer.Option(
-        settings.port, "--port", "-p", help="Bind port"
-    ),
-    reload: bool = typer.Option(
-        False, "--reload", help="Enable uvicorn hot reload"
-    ),
+    host: str = typer.Option(settings.host, "--host", "-h", help="Bind host address"),
+    port: int = typer.Option(settings.port, "--port", "-p", help="Bind port"),
+    reload: bool = typer.Option(False, "--reload", help="Enable uvicorn hot reload"),
 ) -> None:
     """Start the FastAPI HTTP + FastMCP server."""
     uvicorn.run(
