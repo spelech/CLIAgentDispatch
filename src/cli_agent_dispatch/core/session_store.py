@@ -97,6 +97,14 @@ class SessionStore:
                 del self._sessions[k]
             return len(expired_keys)
 
+    async def list_all(self) -> list[SessionRecord]:
+        """List all active, unexpired session records."""
+        async with self._lock:
+            now = time.time()
+            return [
+                v for v in self._sessions.values() if now - v.last_active_at <= self.default_ttl
+            ]
+
     async def count(self) -> int:
         async with self._lock:
             return len(self._sessions)

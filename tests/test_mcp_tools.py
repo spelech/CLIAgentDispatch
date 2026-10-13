@@ -1,9 +1,16 @@
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from cli_agent_dispatch.core.models import TaskResult
-from cli_agent_dispatch.mcp.server import delegate_task_tool
+from cli_agent_dispatch.core.models import ExecutorType, InvestigationResult, TaskResult
+from cli_agent_dispatch.core.session_store import session_store
+from cli_agent_dispatch.mcp.server import (
+    close_session_tool,
+    delegate_task_tool,
+    investigate_incident_tool,
+    list_active_sessions_tool,
+)
 
 
 @pytest.mark.asyncio
@@ -22,8 +29,11 @@ async def test_delegate_task_tool_success():
             prompt="Refactor auth",
             executor="opencode",
             workspace="/containers",
+            session_id="session-123",
         )
         assert "Refactored 3 files successfully" in output
+        req = mock_dispatch.call_args[0][0]
+        assert req.session_id == "session-123"
 
 
 @pytest.mark.asyncio
@@ -46,3 +56,54 @@ async def test_delegate_task_tool_failure():
         assert "Execution failed via agy" in output
         assert "Permission denied" in output
         assert "Partial output before crash" in output
+
+
+@pytest.mark.asyncio
+async def test_investigate_incident_tool():
+    mock_res = InvestigationResult(
+        target="caddy",
+        success=True,
+        root_cause="Stale lock file in data dir",
+        proposed_fix="rm -f /data/lock && restart",
+        category="filesystem",
+        turns_used=2,
+        duration_seconds=3.5,
+        raw_output="Root cause determined",
+    )
+    with patch(
+        "cli_agent_dispatch.mcp.server.engine.investigate", new_callable=AsyncMock
+    ) as mock_investigate:
+        mock_investigate.return_value = mock_res
+        output = await investigate_incident_tool(
+            target="caddy",
+            error_logs="bind: address already in use",
+            exit_code="1",
+        )
+        data = json.loads(output)
+        assert data["success"] is True
+        assert data["target"] == "caddy"
+        assert "Stale lock file" in data["root_cause"]
+        assert data["category"] == "filesystem"
+        assert data["turns_used"] == 2
+
+
+@pytest.mark.asyncio
+async def test_session_management_tools():
+    # Setup test session
+    client_id = "test-mcp-session-1"
+    await session_store.get_or_create(client_id=client_id, executor_type=ExecutorType.AGY)
+
+    # Test list_active_sessions
+    list_output = await list_active_sessions_tool()
+    data = json.loads(list_output)
+    assert data["count"] >= 1
+    session_ids = [s["client_id"] for s in data["active_sessions"]]
+    assert client_id in session_ids
+
+    # Test close_session
+    close_output = await close_session_tool(client_id)
+    assert f"Session '{client_id}' successfully closed" in close_output
+
+    # Test close_session when not found
+    close_again = await close_session_tool(client_id)
+    assert "not found" in close_again
