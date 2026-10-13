@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.transport_security import TransportSecuritySettings
 
+from cli_agent_dispatch.api.anthropic_routes import router as anthropic_router
 from cli_agent_dispatch.api.openai_routes import router as openai_router
 from cli_agent_dispatch.api.session_routes import router as session_router
 from cli_agent_dispatch.config import settings
@@ -42,6 +43,9 @@ app.add_middleware(
 
 # Register OpenAI Compatibility Router (/v1/models, /v1/chat/completions)
 app.include_router(openai_router)
+
+# Register Anthropic Compatibility Router (/v1/messages)
+app.include_router(anthropic_router)
 
 # Register Interactive Sessions and SRE Investigation Router (/v1/investigate, /v1/sessions)
 app.include_router(session_router)
