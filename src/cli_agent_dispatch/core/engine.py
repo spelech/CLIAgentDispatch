@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from cli_agent_dispatch.core.exceptions import ExecutorNotFoundError
@@ -9,6 +10,7 @@ from cli_agent_dispatch.core.models import (
     ExecutorType,
     InvestigationRequest,
     InvestigationResult,
+    StreamChunk,
     TaskRequest,
     TaskResult,
 )
@@ -142,6 +144,18 @@ class DispatchEngine:
                 f"Task failed via '{executor.name}' in {result.duration_seconds}s: {result.error}"
             )
         return result
+
+    async def dispatch_stream(
+        self, request: TaskRequest
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """Route and execute a streaming task request against the target executor."""
+        executor = self.get_executor(request.executor.value)
+        logger.info(
+            f"Dispatching streaming task to executor='{executor.name}', model='{request.model}', "
+            f"workspace='{request.workspace}'"
+        )
+        async for chunk in executor.execute_stream(request):
+            yield chunk
 
     async def investigate(self, request: InvestigationRequest) -> InvestigationResult:
         """Executes an interactive SRE investigation session with structured resolution."""

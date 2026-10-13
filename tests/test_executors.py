@@ -80,7 +80,7 @@ async def test_opencode_cli_timeout(tmp_path):
     )
 
     fake_cli = tmp_path / "opencode"
-    fake_cli.write_text("#!/bin/sh\nsleep 10")
+    fake_cli.write_text("#!/bin/sh\nexec sleep 10")
     fake_cli.chmod(0o755)
 
     with (
@@ -142,7 +142,7 @@ async def test_agy_execution_failure(tmp_path):
 async def test_engine_dispatch_and_convenience_function():
     engine = DispatchEngine()
     mock_executor = MagicMock()
-    mock_executor.name = "custom"
+    mock_executor.name = "opencode"
     mock_executor.execute = AsyncMock(
         return_value=MagicMock(success=True, duration_seconds=0.1, output="done")
     )
@@ -153,3 +153,36 @@ async def test_engine_dispatch_and_convenience_function():
 
     with pytest.raises(ExecutorNotFoundError):
         engine.get_executor("nonexistent")
+
+
+@pytest.mark.asyncio
+async def test_engine_dispatch_stream_and_delegate_task():
+    from cli_agent_dispatch.core.engine import delegate_task
+    from cli_agent_dispatch.core.models import StreamChunk
+
+    engine = DispatchEngine()
+    mock_executor = MagicMock()
+    mock_executor.name = "opencode"
+
+    async def mock_stream(req):
+        yield StreamChunk(delta="stream test", session_id="ses-1")
+
+    mock_executor.execute_stream = mock_stream
+    mock_executor.execute = AsyncMock(
+        return_value=MagicMock(success=True, duration_seconds=0.1, output="done")
+    )
+    engine.register_executor(mock_executor)
+
+    chunks = []
+    async for chunk in engine.dispatch_stream(
+        TaskRequest(prompt="stream", executor=ExecutorType.OPENCODE)
+    ):
+        chunks.append(chunk)
+
+    assert len(chunks) == 1
+    assert chunks[0].delta == "stream test"
+
+    with patch("cli_agent_dispatch.core.engine.engine.dispatch", mock_executor.execute):
+        res = await delegate_task(prompt="convenience call", executor="opencode")
+        assert res.output == "done"
+
