@@ -73,7 +73,7 @@ async def test_anthropic_messages_multi_turn_delta(async_client):
         mock_dispatch.return_value = mock_result
 
         payload = {
-            "model": "claude-3-5-sonnet",
+            "model": "claude-sonnet-5.5",
             "messages": [
                 {"role": "user", "content": "Step 1"},
                 {"role": "assistant", "content": "Done with step 1"},

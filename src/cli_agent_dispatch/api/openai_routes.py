@@ -25,12 +25,15 @@ router = APIRouter(prefix="/v1", tags=["OpenAI Compatibility"])
 
 AVAILABLE_MODELS = [
     ModelCard(id="opencode"),
-    ModelCard(id="opencode-qwen"),
+    ModelCard(id="opencode-default"),
+    ModelCard(id="opencode-small"),
     ModelCard(id="agy"),
     ModelCard(id="agy-gemini"),
     ModelCard(id="agy-claude"),
-    ModelCard(id="claude-sonnet-5.5"),
     ModelCard(id="gemini-3.8-flash"),
+    ModelCard(id="claude-sonnet-5.5"),
+    ModelCard(id="claude-opus-5.5"),
+    ModelCard(id="gpt-oss-120b"),
 ]
 
 
@@ -47,7 +50,12 @@ def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | No
         model_override = model_name
     else:
         exec_type = ExecutorType.OPENCODE
-        model_override = "qwen3.7-flash" if "qwen" in name_lower else None
+        if "small" in name_lower:
+            model_override = "opencode-small"
+        elif "default" in name_lower or "opencode" in name_lower:
+            model_override = "opencode-default"
+        else:
+            model_override = model_name
     return exec_type, model_override
 
 

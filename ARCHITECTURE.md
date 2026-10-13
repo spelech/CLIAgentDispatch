@@ -4,21 +4,23 @@
 
 ```mermaid
 flowchart TD
-    subgraph UI ["User Interfaces"]
-        LC["LibreChat UI (:8451)"]
+    subgraph Clients ["AI Clients & Automation"]
+        OCL["OpenClaw Agent (:10.0.10.10)"]
         CLI["Terminal CLI (cli-agent-dispatch)"]
         MB["Monitorbot SRE Watcher"]
     end
 
     subgraph Hubs ["Routing & Gateway Hubs"]
-        LITE["LiteLLM Gateway (:4000)"]
-        MCG["Model Context Gateway (:8080)"]
+        LITE["LiteLLM Gateway (:8448)"]
+        MCG["Model Context Gateway (:8026)"]
     end
 
-    subgraph Service ["CLIAgentDispatch (:8028)"]
-        API["FastAPI Application"]
+    subgraph Service ["CLIAgentDispatch (:8032)"]
+        API["FastAPI Gateway"]
+        STORE["SessionStore (Thread Continuity)"]
+        OAI["OpenAI Bridge (/v1/chat/completions)"]
+        ANTH["Anthropic Bridge (/v1/messages)"]
         MCP["FastMCP Server (/mcp)"]
-        OAI["OpenAI Bridge (/v1)"]
         ENG["DispatchEngine"]
         TAP["Diagnostic RingBuffer"]
     end
@@ -29,14 +31,16 @@ flowchart TD
         AGY_CLI["Antigravity agy CLI Binary"]
     end
 
-    LC -->|/v1/chat/completions| LITE
-    LC -->|Tool Calls| MCG
-    LITE -->|/v1/chat/completions| OAI
+    OCL -->|POST /v1/messages| ANTH
+    OCL -->|POST /v1/chat/completions| LITE
+    LITE -->|POST /v1/chat/completions| OAI
     MCG -->|SSE /mcp| MCP
     MB -->|Python Library Import| ENG
     CLI -->|Command Execution| ENG
 
-    OAI --> ENG
+    OAI --> STORE
+    ANTH --> STORE
+    STORE --> ENG
     MCP --> ENG
     ENG --> TAP
 
@@ -47,20 +51,52 @@ flowchart TD
 
 ---
 
+## 🔄 Sequence: Anthropic & OpenAI Streaming Delegation
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as OpenClaw / LiteLLM
+    participant Gateway as CLIAgentDispatch (:8032)
+    participant Store as SessionStore
+    participant Engine as DispatchEngine
+    participant Agy as Antigravity (agy CLI)
+
+    Client->>Gateway: POST /v1/messages or /v1/chat/completions (stream=true)
+    Gateway->>Store: get(client_session_id)
+    alt Existing Session Found
+        Store-->>Gateway: native_session_id ("conv-123")
+        Note over Gateway: Extract delta user turn only
+    else New Session
+        Store-->>Gateway: None
+        Note over Gateway: Format full prompt + system instructions
+    end
+    Gateway->>Engine: dispatch_stream(TaskRequest)
+    Engine->>Agy: agy --model <model> --output-format stream-json --print <prompt>
+    loop Streaming NDJSON Output
+        Agy-->>Engine: {"type": "step_update", "text_delta": "..."}
+        Engine-->>Gateway: StreamChunk(delta)
+        Gateway-->>Client: SSE text_delta chunk
+    end
+    Agy-->>Engine: {"type": "result", "conversation_id": "conv-123"}
+    Engine->>Store: update_native_id(client_id, "conv-123")
+    Gateway-->>Client: Final SSE stop event
+```
+
+---
+
 ## 🔄 Sequence: FastMCP Tool Delegation
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as User / LLM
-    participant LC as LibreChat
-    participant MCG as Model Context Gateway
-    participant CAD as CLIAgentDispatch (:8028)
+    actor Caller as MCG Client / Agent
+    participant MCG as Model Context Gateway (:8026)
+    participant CAD as CLIAgentDispatch (:8032)
     participant OC as OpenCode (:4096)
     participant AGY as agy CLI
 
-    User->>LC: "Investigate container logs with OpenCode"
-    LC->>MCG: execute_tool("cli-agent-dispatch/delegate_task")
+    Caller->>MCG: execute_tool("cli-agent-dispatch/delegate_task")
     MCG->>CAD: POST /mcp/call_tool (delegate_task)
     alt Executor == opencode
         CAD->>OC: POST /session
@@ -72,29 +108,5 @@ sequenceDiagram
         AGY-->>CAD: stdout/stderr
     end
     CAD-->>MCG: tool execution result
-    MCG-->>LC: execution output
-    LC-->>User: Formatted response & patches
-```
-
----
-
-## 🔄 Sequence: OpenAI Chat Completion Bridge
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as User
-    participant LC as LibreChat
-    participant LITE as LiteLLM (:4000)
-    participant CAD as CLIAgentDispatch (:8028)
-    participant ENG as DispatchEngine
-
-    User->>LC: Select "OpenCode Agent" & send prompt
-    LC->>LITE: POST /v1/chat/completions
-    LITE->>CAD: POST /v1/chat/completions
-    CAD->>ENG: dispatch(prompt, executor="opencode")
-    ENG-->>CAD: TaskResult
-    CAD-->>LITE: SSE Stream chunk / JSON response
-    LITE-->>LC: SSE Stream tokens
-    LC-->>User: Streaming text
+    MCG-->>Caller: Formatted response & diagnostics
 ```

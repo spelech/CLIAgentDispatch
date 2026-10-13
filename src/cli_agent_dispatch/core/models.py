@@ -29,7 +29,7 @@ class TaskRequest(BaseModel):
     )
     model: str | None = Field(
         default=None,
-        description="Override model ID (e.g. 'qwen3.7-flash', 'gemini-2.5-flash').",
+        description="Override model ID (e.g. 'opencode-default', 'gemini-3.8-flash', 'claude-sonnet-5.5').",
     )
     provider: str | None = Field(
         default=None,

@@ -30,7 +30,7 @@ async def delegate_task_tool(
         prompt: Task instructions, prompt, or problem description for the agent.
         executor: Target engine: 'opencode' (default) or 'agy' (Antigravity CLI).
         workspace: Absolute path to target repository/directory (defaults to /containers).
-        model: Model override (e.g. 'qwen3.7-flash' or 'gemini-2.5-flash').
+        model: Model override (e.g. 'opencode-default', 'gemini-3.8-flash', or 'claude-sonnet-5.5').
         timeout: Execution timeout in seconds (default: 180).
 
     Returns:

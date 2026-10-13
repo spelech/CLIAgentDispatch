@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         default=os.path.expanduser("~/.nvm/versions/node/v22.17.0/bin/opencode"),
         alias="OPENCODE_PATH",
     )
-    opencode_default_model: str = Field(default="qwen3.7-flash", alias="OPENCODE_MODEL_ID")
+    opencode_default_model: str = Field(default="opencode-default", alias="OPENCODE_MODEL_ID")
     opencode_default_provider: str = Field(default="litellm", alias="OPENCODE_PROVIDER_ID")
 
     # Antigravity (agy) Configuration

@@ -39,12 +39,17 @@ def _extract_text_content(content: str | list[Any]) -> str:
 
 def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | None]:
     name_lower = model_name.lower()
-    if any(k in name_lower for k in ["claude", "agy", "gemini", "opus", "sonnet"]):
+    if any(k in name_lower for k in ["claude", "agy", "gemini", "opus", "sonnet", "gpt-oss"]):
         exec_type = ExecutorType.AGY
         model_override = model_name
     else:
         exec_type = ExecutorType.OPENCODE
-        model_override = "qwen3.7-flash" if "qwen" in name_lower else None
+        if "small" in name_lower:
+            model_override = "opencode-small"
+        elif "default" in name_lower or "opencode" in name_lower:
+            model_override = "opencode-default"
+        else:
+            model_override = model_name
     return exec_type, model_override
 
 
