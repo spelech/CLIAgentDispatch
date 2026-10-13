@@ -59,16 +59,19 @@ async def test_chat_completions_non_streaming(async_client):
 
 @pytest.mark.asyncio
 async def test_chat_completions_streaming(async_client):
-    mock_res = TaskResult(
-        success=True,
-        executor="agy",
-        output="Streaming agy output",
-        duration_seconds=0.2,
-    )
+    from cli_agent_dispatch.core.models import StreamChunk
+
+    async def mock_stream_gen(task_req):
+        yield StreamChunk(
+            delta="Streaming agy output",
+            session_id="conv-1",
+            is_final=True,
+            finish_reason="stop",
+        )
+
     with patch(
-        "cli_agent_dispatch.api.openai_routes.engine.dispatch", new_callable=AsyncMock
-    ) as mock_dispatch:
-        mock_dispatch.return_value = mock_res
+        "cli_agent_dispatch.api.openai_routes.engine.dispatch_stream", side_effect=mock_stream_gen
+    ):
         payload = {
             "model": "agy-gemini",
             "messages": [{"role": "user", "content": "Review PR"}],
