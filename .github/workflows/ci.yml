@@ -2,35 +2,139 @@ name: CI
 
 on:
   push:
-    branches: ["main", "feature/**"]
+    branches: ["main", "develop", "feat/**", "feature/**", "fix/**"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "develop"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test & Lint
+  lint-and-format:
+    name: Lint & Format Check
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Run Ruff Linter
+        run: uv run ruff check .
+
+      - name: Run Ruff Format Check
+        run: uv run ruff format --check .
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    needs: lint-and-format
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
-          cache: "pip"
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run Pytest with Coverage Gate (>=80%)
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          uv run pytest -v --cov=cli_agent_dispatch --cov-report=xml --cov-report=term-missing --cov-fail-under=80
 
-      - name: Run Ruff Lint
-        run: ruff check .
+      - name: Upload Coverage Artifact
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          if-no-files-found: ignore
 
-      - name: Run Ruff Format Check
-        run: ruff format --check .
+  integration-smoke:
+    name: Fullstack API Smoke Test
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Run Pytest with Coverage Gate
-        run: pytest
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Start Gateway in Background
+        run: |
+          uv run cli-agent-dispatch serve --port 8032 &
+          SERVER_PID=$!
+          echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+
+      - name: Poll Health Endpoint
+        run: |
+          for i in {1..30}; do
+            if curl -sf http://127.0.0.1:8032/health; then
+              echo "Server is healthy!"
+              exit 0
+            fi
+            echo "Waiting for server... ($i/30)"
+            sleep 1
+          done
+          echo "Server failed to start within 30 seconds"
+          exit 1
+
+      - name: Verify API Endpoints & Contracts
+        run: |
+          echo "=== 1. Health Probe ==="
+          curl -sf http://127.0.0.1:8032/health | grep -q "CLIAgentDispatch"
+
+          echo "=== 2. Diagnostics Probe ==="
+          curl -sf http://127.0.0.1:8032/api/diagnostics | grep -q "events"
+
+          echo "=== 3. Models Probe ==="
+          curl -sf http://127.0.0.1:8032/v1/models | grep -q "opencode-default"
+
+          echo "=== 4. Validation Contract Probe (Empty Messages) ==="
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8032/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d '{"model":"opencode","messages":[]}')
+          if [ "$STATUS" -ne 400 ]; then
+            echo "Expected 400 for empty messages, got $STATUS"
+            exit 1
+          fi
+
+          STATUS_ANTH=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8032/v1/messages \
+            -H "Content-Type: application/json" \
+            -d '{"model":"claude-sonnet-5.5","messages":[]}')
+          if [ "$STATUS_ANTH" -ne 400 ]; then
+            echo "Expected 400 for empty Anthropic messages, got $STATUS_ANTH"
+            exit 1
+          fi
+
+          echo "All integration smoke probes passed cleanly!"
