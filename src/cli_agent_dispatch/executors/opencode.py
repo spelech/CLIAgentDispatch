@@ -8,6 +8,7 @@ import httpx
 
 from cli_agent_dispatch.config import settings
 from cli_agent_dispatch.core.models import StreamChunk, TaskRequest, TaskResult
+from cli_agent_dispatch.core.session_store import session_store
 from cli_agent_dispatch.executors.base import BaseExecutor
 
 
@@ -138,7 +139,13 @@ class OpenCodeExecutor(BaseExecutor):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            if session_id:
+                session_store.register_process(session_id, process)
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            finally:
+                if session_id:
+                    session_store.unregister_process(session_id)
             duration = time.perf_counter() - start_time
 
             if process.returncode == 0:

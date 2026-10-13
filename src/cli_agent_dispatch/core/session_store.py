@@ -32,7 +32,33 @@ class SessionStore:
     def __init__(self, default_ttl_seconds: int = 86400):
         self.default_ttl = default_ttl_seconds
         self._sessions: dict[str, SessionRecord] = {}
+        self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._lock = asyncio.Lock()
+
+    def register_process(self, client_id: str, proc: asyncio.subprocess.Process) -> None:
+        """Register a running OS subprocess associated with a session."""
+        self._active_processes[client_id] = proc
+
+    def unregister_process(self, client_id: str) -> None:
+        """Unregister an OS subprocess once execution completes."""
+        self._active_processes.pop(client_id, None)
+
+    async def kill_active_process(self, client_id: str) -> bool:
+        """Terminate and kill any running OS subprocess for a session."""
+        proc = self._active_processes.pop(client_id, None)
+        if not proc:
+            return False
+        try:
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=1.5)
+                except TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+            return True
+        except Exception:
+            return False
 
     async def get(self, client_id: str) -> SessionRecord | None:
         """Retrieve a session by its client ID, updating touch if valid."""

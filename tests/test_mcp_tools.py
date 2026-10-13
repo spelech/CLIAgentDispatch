@@ -1,15 +1,19 @@
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from cli_agent_dispatch.core.models import ExecutorType, InvestigationResult, TaskResult
 from cli_agent_dispatch.core.session_store import session_store
 from cli_agent_dispatch.mcp.server import (
+    check_executor_health_tool,
     close_session_tool,
     delegate_task_tool,
+    force_kill_session_tool,
+    inspect_workspace_diff_tool,
     investigate_incident_tool,
     list_active_sessions_tool,
+    list_available_models_tool,
 )
 
 
@@ -107,3 +111,63 @@ async def test_session_management_tools():
     # Test close_session when not found
     close_again = await close_session_tool(client_id)
     assert "not found" in close_again
+
+
+@pytest.mark.asyncio
+async def test_force_kill_session_tool():
+    client_id = "test-mcp-session-kill"
+    await session_store.get_or_create(client_id=client_id, executor_type=ExecutorType.AGY)
+
+    # Mock active process
+    mock_proc = MagicMock()
+    mock_proc.returncode = None
+    mock_proc.terminate = MagicMock()
+    mock_proc.wait = AsyncMock(return_value=0)
+    session_store.register_process(client_id, mock_proc)
+
+    # Call force kill tool
+    kill_output = await force_kill_session_tool(client_id)
+    data = json.loads(kill_output)
+    assert data["client_id"] == client_id
+    assert data["active_process_killed"] is True
+    assert data["session_evicted"] is True
+    assert data["status"] == "terminated"
+
+    # Verify process terminated
+    mock_proc.terminate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_list_available_models_tool():
+    output = await list_available_models_tool()
+    data = json.loads(output)
+    assert "models" in data
+    assert data["count"] >= 5
+    model_ids = [m["id"] for m in data["models"]]
+    assert "agy" in model_ids
+    assert "gemini-3.8-flash" in model_ids
+    assert "claude-sonnet-5.5" in model_ids
+    assert "opencode-default" in model_ids
+
+
+@pytest.mark.asyncio
+async def test_check_executor_health_tool():
+    output = await check_executor_health_tool()
+    data = json.loads(output)
+    assert "status" in data
+    assert "executors" in data
+    assert "agy" in data["executors"]
+    assert "opencode" in data["executors"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_workspace_diff_tool(tmp_path):
+    # Non-existent directory
+    res_err = await inspect_workspace_diff_tool("/non/existent/path/xyz")
+    assert "Workspace directory not found" in res_err
+
+    # Valid directory
+    res = await inspect_workspace_diff_tool(str(tmp_path))
+    data = json.loads(res)
+    assert data["workspace"] == str(tmp_path)
+    assert "clean" in data
