@@ -14,6 +14,8 @@ def normalize_agy_model(model: str | None) -> str:
     if not model:
         return settings.agy_default_model
     m = model.lower().strip()
+    if m in ["agy", "default", "auto", "agy-gemini"]:
+        return settings.agy_default_model
     if "opus" in m:
         return "Claude Opus 5.5 (Medium)"
     if "sonnet" in m or "claude" in m:
