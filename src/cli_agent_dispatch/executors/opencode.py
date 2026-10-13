@@ -176,9 +176,7 @@ class OpenCodeExecutor(BaseExecutor):
                 metadata={"mode": "cli_fallback"},
             )
 
-    async def execute_stream(
-        self, request: TaskRequest
-    ) -> AsyncGenerator[StreamChunk, None]:
+    async def execute_stream(self, request: TaskRequest) -> AsyncGenerator[StreamChunk, None]:
         res = await self.execute(request)
         if res.success:
             lines = res.output.splitlines(keepends=True)
@@ -197,4 +195,3 @@ class OpenCodeExecutor(BaseExecutor):
                 session_id=res.session_id,
                 finish_reason="stop",
             )
-

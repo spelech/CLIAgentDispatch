@@ -158,10 +158,14 @@ class SessionMessageRequest(BaseModel):
 
 class StreamChunk(BaseModel):
     delta: str = Field(default="", description="Incremental text token or chunk.")
-    is_final: bool = Field(default=False, description="Whether this is the final termination chunk.")
+    is_final: bool = Field(
+        default=False, description="Whether this is the final termination chunk."
+    )
     session_id: str | None = Field(default=None, description="Active session/conversation ID.")
     finish_reason: str | None = Field(default=None, description="Stop or finish reason.")
-    usage: dict[str, int] | None = Field(default=None, description="Usage metrics if reported by executor.")
+    usage: dict[str, int] | None = Field(
+        default=None, description="Usage metrics if reported by executor."
+    )
 
 
 # --- OpenAI Compatibility Schemas ---
@@ -258,4 +262,3 @@ class AnthropicMessagesResponse(BaseModel):
     stop_reason: str | None = "end_turn"
     stop_sequence: str | None = None
     usage: AnthropicUsage = Field(default_factory=AnthropicUsage)
-

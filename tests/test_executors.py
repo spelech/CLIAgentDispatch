@@ -185,4 +185,3 @@ async def test_engine_dispatch_stream_and_delegate_task():
     with patch("cli_agent_dispatch.core.engine.engine.dispatch", mock_executor.execute):
         res = await delegate_task(prompt="convenience call", executor="opencode")
         assert res.output == "done"
-

@@ -16,7 +16,9 @@ async def test_anthropic_messages_non_streaming(async_client):
         duration_seconds=0.25,
     )
 
-    with patch("cli_agent_dispatch.api.anthropic_routes.engine.dispatch", new_callable=AsyncMock) as mock_dispatch:
+    with patch(
+        "cli_agent_dispatch.api.anthropic_routes.engine.dispatch", new_callable=AsyncMock
+    ) as mock_dispatch:
         mock_dispatch.return_value = mock_result
 
         payload = {
@@ -65,7 +67,9 @@ async def test_anthropic_messages_multi_turn_delta(async_client):
         duration_seconds=0.1,
     )
 
-    with patch("cli_agent_dispatch.api.anthropic_routes.engine.dispatch", new_callable=AsyncMock) as mock_dispatch:
+    with patch(
+        "cli_agent_dispatch.api.anthropic_routes.engine.dispatch", new_callable=AsyncMock
+    ) as mock_dispatch:
         mock_dispatch.return_value = mock_result
 
         payload = {
@@ -94,9 +98,14 @@ async def test_anthropic_messages_streaming(async_client):
     async def mock_stream_gen(task_req: TaskRequest):
         yield StreamChunk(delta="Streaming ", session_id="conv-anth-stream")
         yield StreamChunk(delta="tokens ", session_id="conv-anth-stream")
-        yield StreamChunk(delta="safely", is_final=True, session_id="conv-anth-stream", finish_reason="stop")
+        yield StreamChunk(
+            delta="safely", is_final=True, session_id="conv-anth-stream", finish_reason="stop"
+        )
 
-    with patch("cli_agent_dispatch.api.anthropic_routes.engine.dispatch_stream", side_effect=mock_stream_gen):
+    with patch(
+        "cli_agent_dispatch.api.anthropic_routes.engine.dispatch_stream",
+        side_effect=mock_stream_gen,
+    ):
         payload = {
             "model": "claude-sonnet-5.5",
             "messages": [{"role": "user", "content": [{"type": "text", "text": "Stream test"}]}],

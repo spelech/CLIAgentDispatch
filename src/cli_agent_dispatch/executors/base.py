@@ -19,9 +19,6 @@ class BaseExecutor(ABC):
         pass
 
     @abstractmethod
-    async def execute_stream(
-        self, request: TaskRequest
-    ) -> AsyncGenerator[StreamChunk, None]:
+    async def execute_stream(self, request: TaskRequest) -> AsyncGenerator[StreamChunk, None]:
         """Stream output chunks from the executor engine."""
         pass
-

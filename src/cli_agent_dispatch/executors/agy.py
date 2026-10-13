@@ -148,9 +148,7 @@ class AgyExecutor(BaseExecutor):
                 duration_seconds=round(duration, 3),
             )
 
-    async def execute_stream(
-        self, request: TaskRequest
-    ) -> AsyncGenerator[StreamChunk, None]:
+    async def execute_stream(self, request: TaskRequest) -> AsyncGenerator[StreamChunk, None]:
         timeout = request.timeout or settings.default_timeout
         model = normalize_agy_model(request.model)
         workspace = request.workspace or settings.default_workspace
@@ -231,7 +229,9 @@ class AgyExecutor(BaseExecutor):
                             elif "text_delta" in data:
                                 yield StreamChunk(delta=data["text_delta"], session_id=session_id)
                             elif "response" in data and data["response"]:
-                                yield StreamChunk(delta=str(data["response"]), session_id=session_id)
+                                yield StreamChunk(
+                                    delta=str(data["response"]), session_id=session_id
+                                )
                             continue
                     except (json.JSONDecodeError, TypeError, ValueError):
                         pass
@@ -274,4 +274,3 @@ class AgyExecutor(BaseExecutor):
                 session_id=session_id,
                 finish_reason="stop",
             )
-

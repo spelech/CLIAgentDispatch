@@ -133,7 +133,7 @@ async def _stream_anthropic_sse(
     yield f"event: message_delta\ndata: {json.dumps(msg_delta_event)}\n\n"
 
     # 6. message_stop
-    yield "event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"
+    yield 'event: message_stop\ndata: {"type": "message_stop"}\n\n'
 
 
 @router.post("/messages")

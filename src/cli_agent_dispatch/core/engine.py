@@ -145,9 +145,7 @@ class DispatchEngine:
             )
         return result
 
-    async def dispatch_stream(
-        self, request: TaskRequest
-    ) -> AsyncGenerator[StreamChunk, None]:
+    async def dispatch_stream(self, request: TaskRequest) -> AsyncGenerator[StreamChunk, None]:
         """Route and execute a streaming task request against the target executor."""
         executor = self.get_executor(request.executor.value)
         logger.info(

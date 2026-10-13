@@ -136,9 +136,7 @@ async def create_chat_completion(
 
     native_session_id = None
     is_resumed_turn = False
-    system_prompt = next(
-        (m.content for m in request.messages if m.role.lower() == "system"), None
-    )
+    system_prompt = next((m.content for m in request.messages if m.role.lower() == "system"), None)
 
     if client_session_id:
         existing_session = await session_store.get(client_session_id)

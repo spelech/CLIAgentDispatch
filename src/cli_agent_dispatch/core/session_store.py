@@ -91,9 +91,7 @@ class SessionStore:
         async with self._lock:
             now = time.time()
             expired_keys = [
-                k
-                for k, v in self._sessions.items()
-                if now - v.last_active_at > self.default_ttl
+                k for k, v in self._sessions.items() if now - v.last_active_at > self.default_ttl
             ]
             for k in expired_keys:
                 del self._sessions[k]

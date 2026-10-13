@@ -17,7 +17,9 @@ async def test_openai_chat_completions_multi_turn_session_flow(async_client):
         duration_seconds=0.3,
     )
 
-    with patch("cli_agent_dispatch.api.openai_routes.engine.dispatch", new_callable=AsyncMock) as mock_dispatch:
+    with patch(
+        "cli_agent_dispatch.api.openai_routes.engine.dispatch", new_callable=AsyncMock
+    ) as mock_dispatch:
         mock_dispatch.return_value = turn1_result
 
         payload = {
@@ -56,7 +58,9 @@ async def test_openai_chat_completions_multi_turn_session_flow(async_client):
         duration_seconds=0.2,
     )
 
-    with patch("cli_agent_dispatch.api.openai_routes.engine.dispatch", new_callable=AsyncMock) as mock_dispatch:
+    with patch(
+        "cli_agent_dispatch.api.openai_routes.engine.dispatch", new_callable=AsyncMock
+    ) as mock_dispatch:
         mock_dispatch.return_value = turn2_result
 
         payload = {
@@ -87,9 +91,13 @@ async def test_openai_chat_completions_incremental_streaming(async_client):
     async def mock_stream_gen(task_req: TaskRequest):
         yield StreamChunk(delta="Hello", session_id="conv-stream-1")
         yield StreamChunk(delta=" world", session_id="conv-stream-1")
-        yield StreamChunk(delta="!", is_final=True, session_id="conv-stream-1", finish_reason="stop")
+        yield StreamChunk(
+            delta="!", is_final=True, session_id="conv-stream-1", finish_reason="stop"
+        )
 
-    with patch("cli_agent_dispatch.api.openai_routes.engine.dispatch_stream", side_effect=mock_stream_gen):
+    with patch(
+        "cli_agent_dispatch.api.openai_routes.engine.dispatch_stream", side_effect=mock_stream_gen
+    ):
         payload = {
             "model": "agy-gemini",
             "messages": [{"role": "user", "content": "Hi"}],
