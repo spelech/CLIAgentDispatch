@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
+      - name: Verify Release & Link Integrity (Gate 1)
+        run: python3 scripts/verify_release.py
+
       - name: Run Ruff Linter
         run: uv run ruff check .
 
