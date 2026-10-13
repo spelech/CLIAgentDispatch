@@ -2,11 +2,12 @@ import asyncio
 import inspect
 import os
 import time
+from collections.abc import AsyncGenerator
 
 import httpx
 
 from cli_agent_dispatch.config import settings
-from cli_agent_dispatch.core.models import TaskRequest, TaskResult
+from cli_agent_dispatch.core.models import StreamChunk, TaskRequest, TaskResult
 from cli_agent_dispatch.executors.base import BaseExecutor
 
 
@@ -150,6 +151,11 @@ class OpenCodeExecutor(BaseExecutor):
                 )
 
         except TimeoutError:
+            try:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass
             duration = time.perf_counter() - start_time
             return TaskResult(
                 success=False,
@@ -169,3 +175,26 @@ class OpenCodeExecutor(BaseExecutor):
                 duration_seconds=round(duration, 3),
                 metadata={"mode": "cli_fallback"},
             )
+
+    async def execute_stream(
+        self, request: TaskRequest
+    ) -> AsyncGenerator[StreamChunk, None]:
+        res = await self.execute(request)
+        if res.success:
+            lines = res.output.splitlines(keepends=True)
+            for line in lines:
+                yield StreamChunk(delta=line, session_id=res.session_id)
+            yield StreamChunk(
+                delta="",
+                is_final=True,
+                session_id=res.session_id,
+                finish_reason="stop",
+            )
+        else:
+            yield StreamChunk(
+                delta=f"OpenCode execution error: {res.error}",
+                is_final=True,
+                session_id=res.session_id,
+                finish_reason="stop",
+            )
+
