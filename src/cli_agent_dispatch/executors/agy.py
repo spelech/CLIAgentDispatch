@@ -74,10 +74,15 @@ class AgyExecutor(BaseExecutor):
             cmd.extend(["--conversation", request.session_id])
         cmd.extend(["--print", prompt])
 
+        env = os.environ.copy()
+        if workspace:
+            env["PWD"] = workspace
+
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=workspace,
+                env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
