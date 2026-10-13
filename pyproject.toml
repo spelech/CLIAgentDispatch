@@ -41,6 +41,13 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
 
+[tool.coverage.run]
+data_file = ".coverage"
+concurrency = ["thread", "multiprocessing"]
+
+[tool.coverage.run]
+core = "ctrace"
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

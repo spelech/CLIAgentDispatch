@@ -120,7 +120,13 @@ class OpenCodeExecutor(BaseExecutor):
                 duration_seconds=round(duration, 3),
             )
 
-        cmd = [cli_path, "run", request.prompt]
+        cmd = [cli_path, "run", "--auto"]
+        if model:
+            formatted_model = f"{provider}/{model}" if "/" not in model else model
+            cmd.extend(["--model", formatted_model])
+        if session_id:
+            cmd.extend(["--session", session_id])
+        cmd.append(request.prompt)
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
