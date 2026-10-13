@@ -2,11 +2,13 @@ import asyncio
 import inspect
 import os
 import time
+from collections.abc import AsyncGenerator
 
 import httpx
 
 from cli_agent_dispatch.config import settings
-from cli_agent_dispatch.core.models import TaskRequest, TaskResult
+from cli_agent_dispatch.core.models import StreamChunk, TaskRequest, TaskResult
+from cli_agent_dispatch.core.session_store import session_store
 from cli_agent_dispatch.executors.base import BaseExecutor
 
 
@@ -119,15 +121,31 @@ class OpenCodeExecutor(BaseExecutor):
                 duration_seconds=round(duration, 3),
             )
 
-        cmd = [cli_path, "run", request.prompt]
+        cmd = [cli_path, "run", "--auto"]
+        if model:
+            formatted_model = f"{provider}/{model}" if "/" not in model else model
+            cmd.extend(["--model", formatted_model])
+        if session_id:
+            cmd.extend(["--session", session_id])
+        cmd.append(request.prompt)
+        env = os.environ.copy()
+        if workspace:
+            env["PWD"] = workspace
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=workspace,
+                env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            if session_id:
+                session_store.register_process(session_id, process)
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            finally:
+                if session_id:
+                    session_store.unregister_process(session_id)
             duration = time.perf_counter() - start_time
 
             if process.returncode == 0:
@@ -150,6 +168,11 @@ class OpenCodeExecutor(BaseExecutor):
                 )
 
         except TimeoutError:
+            try:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass
             duration = time.perf_counter() - start_time
             return TaskResult(
                 success=False,
@@ -168,4 +191,24 @@ class OpenCodeExecutor(BaseExecutor):
                 error=f"OpenCode CLI execution error: {ex}",
                 duration_seconds=round(duration, 3),
                 metadata={"mode": "cli_fallback"},
+            )
+
+    async def execute_stream(self, request: TaskRequest) -> AsyncGenerator[StreamChunk, None]:
+        res = await self.execute(request)
+        if res.success:
+            lines = res.output.splitlines(keepends=True)
+            for line in lines:
+                yield StreamChunk(delta=line, session_id=res.session_id)
+            yield StreamChunk(
+                delta="",
+                is_final=True,
+                session_id=res.session_id,
+                finish_reason="stop",
+            )
+        else:
+            yield StreamChunk(
+                delta=f"OpenCode execution error: {res.error}",
+                is_final=True,
+                session_id=res.session_id,
+                finish_reason="stop",
             )

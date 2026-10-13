@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cli-agent-dispatch"
-version = "0.1.0"
-description = "Universal CLI & Headless AI Agent Delegation Engine for MCG, LiteLLM, and LibreChat"
+version = "0.2.0"
+description = "Universal CLI & Headless AI Agent Delegation Engine for MCG, LiteLLM, and OpenClaw"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -40,6 +40,11 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
+
+[tool.coverage.run]
+data_file = ".coverage"
+concurrency = ["thread", "multiprocessing"]
+core = "ctrace"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

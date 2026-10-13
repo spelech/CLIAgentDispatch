@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator
 
-from cli_agent_dispatch.core.models import TaskRequest, TaskResult
+from cli_agent_dispatch.core.models import StreamChunk, TaskRequest, TaskResult
 
 
 class BaseExecutor(ABC):
@@ -15,4 +16,9 @@ class BaseExecutor(ABC):
     @abstractmethod
     async def execute(self, request: TaskRequest) -> TaskResult:
         """Execute a task request and return the result."""
+        pass
+
+    @abstractmethod
+    async def execute_stream(self, request: TaskRequest) -> AsyncGenerator[StreamChunk, None]:
+        """Stream output chunks from the executor engine."""
         pass

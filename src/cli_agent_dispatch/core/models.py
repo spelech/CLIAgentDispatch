@@ -29,7 +29,7 @@ class TaskRequest(BaseModel):
     )
     model: str | None = Field(
         default=None,
-        description="Override model ID (e.g. 'qwen3.7-flash', 'gemini-2.5-flash').",
+        description="Override model ID (e.g. 'opencode-default', 'gemini-3.8-flash', 'claude-sonnet-5.5').",
     )
     provider: str | None = Field(
         default=None,
@@ -156,6 +156,18 @@ class SessionMessageRequest(BaseModel):
         return self
 
 
+class StreamChunk(BaseModel):
+    delta: str = Field(default="", description="Incremental text token or chunk.")
+    is_final: bool = Field(
+        default=False, description="Whether this is the final termination chunk."
+    )
+    session_id: str | None = Field(default=None, description="Active session/conversation ID.")
+    finish_reason: str | None = Field(default=None, description="Stop or finish reason.")
+    usage: dict[str, int] | None = Field(
+        default=None, description="Usage metrics if reported by executor."
+    )
+
+
 # --- OpenAI Compatibility Schemas ---
 
 
@@ -170,6 +182,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = None
     stream: bool = False
     max_tokens: int | None = None
+    session_id: str | None = None
+    user: str | None = None
 
 
 class ChatCompletionResponseChoice(BaseModel):
@@ -203,3 +217,48 @@ class ModelCard(BaseModel):
 class ModelListResponse(BaseModel):
     object: str = "list"
     data: list[ModelCard]
+
+
+# --- Anthropic Messages Compatibility Schemas ---
+
+
+class AnthropicTextBlock(BaseModel):
+    type: str = "text"
+    text: str
+
+
+class AnthropicMessage(BaseModel):
+    role: str
+    content: str | list[AnthropicTextBlock] | list[dict[str, Any]]
+
+
+class AnthropicMessagesRequest(BaseModel):
+    model: str
+    messages: list[AnthropicMessage]
+    system: str | list[AnthropicTextBlock] | list[dict[str, Any]] | None = None
+    max_tokens: int = Field(default=4096)
+    temperature: float | None = None
+    stream: bool = False
+    metadata: dict[str, Any] | None = None
+    session_id: str | None = None
+
+
+class AnthropicUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class AnthropicContentBlock(BaseModel):
+    type: str = "text"
+    text: str
+
+
+class AnthropicMessagesResponse(BaseModel):
+    id: str
+    type: str = "message"
+    role: str = "assistant"
+    model: str
+    content: list[AnthropicContentBlock]
+    stop_reason: str | None = "end_turn"
+    stop_sequence: str | None = None
+    usage: AnthropicUsage = Field(default_factory=AnthropicUsage)
