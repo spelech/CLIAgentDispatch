@@ -20,34 +20,82 @@ from cli_agent_dispatch.core.models import (
     TaskRequest,
 )
 from cli_agent_dispatch.core.session_store import session_store
+from cli_agent_dispatch.executors.agy import discover_agy_models
 
 router = APIRouter(prefix="/v1", tags=["OpenAI Compatibility"])
 
-AVAILABLE_MODELS = [
-    ModelCard(id="opencode"),
-    ModelCard(id="opencode-default"),
-    ModelCard(id="opencode-small"),
-    ModelCard(id="agy"),
-    ModelCard(id="agy-gemini"),
-    ModelCard(id="agy-claude"),
-    ModelCard(id="gemini-3.8-flash"),
-    ModelCard(id="claude-sonnet-5.5"),
-    ModelCard(id="claude-opus-5.5"),
-    ModelCard(id="gpt-oss-120b"),
+STATIC_MODEL_ALIASES = [
+    "opencode",
+    "opencode-default",
+    "opencode-small",
+    "agy",
+    "agy-argon",
+    "agy-argon-high",
+    "agy-argon-low",
+    "agy-opus",
+    "agy-opus-medium",
+    "agy-sonnet",
+    "agy-sonnet-medium",
+    "agy-flash",
+    "agy-gemini",
+    "agy-claude",
+    "gemini-3.8-flash",
+    "claude-sonnet-5.5",
+    "claude-opus-5.5",
+    "gpt-oss-120b",
 ]
+
+AVAILABLE_MODELS = [ModelCard(id=m) for m in STATIC_MODEL_ALIASES]
+
+
+def _build_available_models() -> list[ModelCard]:
+    seen: set[str] = set()
+    cards: list[ModelCard] = []
+
+    def _add(model_id: str) -> None:
+        if model_id and model_id not in seen:
+            seen.add(model_id)
+            cards.append(ModelCard(id=model_id))
+
+    for alias in STATIC_MODEL_ALIASES:
+        _add(alias)
+
+    for model_id, display_name in discover_agy_models().items():
+        _add(model_id)
+        _add(display_name)
+
+    return cards
 
 
 @router.get("/models", response_model=ModelListResponse)
 async def list_models() -> ModelListResponse:
     """List available local agent models for OpenAI-compatible clients."""
-    return ModelListResponse(data=AVAILABLE_MODELS)
+    return ModelListResponse(data=_build_available_models())
 
 
 def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | None]:
-    name_lower = model_name.lower()
-    if any(k in name_lower for k in ["agy", "claude", "gemini", "opus", "sonnet", "gpt-oss"]):
+    raw = model_name.strip()
+    for prefix in ("openai/", "litellm/"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :].strip()
+            break
+
+    name_lower = raw.lower()
+    discovered = discover_agy_models()
+    discovered_keys = {k.lower() for k in discovered.keys()} | {
+        v.lower() for v in discovered.values()
+    }
+
+    if (
+        name_lower in discovered_keys
+        or name_lower.startswith("agy-")
+        or any(
+            k in name_lower
+            for k in ["agy", "argon", "claude", "gemini", "opus", "sonnet", "gpt-oss"]
+        )
+    ):
         exec_type = ExecutorType.AGY
-        model_override = model_name
+        model_override = raw
     else:
         exec_type = ExecutorType.OPENCODE
         if "small" in name_lower:
@@ -55,7 +103,7 @@ def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | No
         elif "default" in name_lower or "opencode" in name_lower:
             model_override = "opencode-default"
         else:
-            model_override = model_name
+            model_override = raw
     return exec_type, model_override
 
 

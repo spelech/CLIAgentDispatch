@@ -30,6 +30,36 @@ async def test_list_models(async_client):
     ids = [m["id"] for m in data["data"]]
     assert "opencode" in ids
     assert "agy" in ids
+    assert "agy-argon" in ids
+    assert "agy-argon-high" in ids
+    assert "agy-argon-low" in ids
+    assert "agy-opus" in ids
+    assert "agy-sonnet" in ids
+    assert "gemini-4-argon-medium" in ids
+    assert "Gemini 4 Argon (Medium)" in ids
+    assert "claude-opus-5-5-high" in ids
+
+
+def test_resolve_executor_and_model_argon():
+    from cli_agent_dispatch.api.openai_routes import _resolve_executor_and_model
+    from cli_agent_dispatch.core.models import ExecutorType
+
+    assert _resolve_executor_and_model("gemini-4-argon-medium") == (
+        ExecutorType.AGY,
+        "gemini-4-argon-medium",
+    )
+    assert _resolve_executor_and_model("agy-argon-high") == (
+        ExecutorType.AGY,
+        "agy-argon-high",
+    )
+    assert _resolve_executor_and_model("openai/gemini-4-argon-low") == (
+        ExecutorType.AGY,
+        "gemini-4-argon-low",
+    )
+    assert _resolve_executor_and_model("opencode") == (
+        ExecutorType.OPENCODE,
+        "opencode-default",
+    )
 
 
 @pytest.mark.asyncio

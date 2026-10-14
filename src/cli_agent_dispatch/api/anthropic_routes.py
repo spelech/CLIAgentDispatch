@@ -39,7 +39,9 @@ def _extract_text_content(content: str | list[Any]) -> str:
 
 def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | None]:
     name_lower = model_name.lower()
-    if any(k in name_lower for k in ["claude", "agy", "gemini", "opus", "sonnet", "gpt-oss"]):
+    if any(
+        k in name_lower for k in ["claude", "agy", "argon", "gemini", "opus", "sonnet", "gpt-oss"]
+    ):
         exec_type = ExecutorType.AGY
         model_override = model_name
     else:
