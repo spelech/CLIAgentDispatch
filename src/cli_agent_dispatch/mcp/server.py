@@ -21,7 +21,7 @@ logger = logging.getLogger("CLIAgentDispatch.MCP")
 mcp_server = MCPServer(
     name="cli-agent-dispatch",
     instructions="Universal CLI and Headless AI Agent Delegation Gateway (Antigravity 'agy' and OpenCode)",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 
