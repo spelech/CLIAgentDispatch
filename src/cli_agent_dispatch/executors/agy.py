@@ -1,6 +1,9 @@
 import asyncio
 import json
 import os
+import re
+import shutil
+import subprocess
 import time
 from collections.abc import AsyncGenerator
 
@@ -9,27 +12,162 @@ from cli_agent_dispatch.core.models import StreamChunk, TaskRequest, TaskResult
 from cli_agent_dispatch.core.session_store import session_store
 from cli_agent_dispatch.executors.base import BaseExecutor
 
+DEFAULT_AGY_MODELS: dict[str, str] = {
+    "gemini-4-argon-low": "Gemini 4 Argon (Low)",
+    "gemini-4-argon-medium": "Gemini 4 Argon (Medium)",
+    "gemini-4-argon-high": "Gemini 4 Argon (High)",
+    "gemini-3.8-flash-low": "Gemini 3.8 Flash (Low)",
+    "gemini-3.8-flash-medium": "Gemini 3.8 Flash (Medium)",
+    "gemini-3.8-flash-high": "Gemini 3.8 Flash (High)",
+    "claude-sonnet-5-5-low": "Claude Sonnet 5.5 (Low)",
+    "claude-sonnet-5-5-medium": "Claude Sonnet 5.5 (Medium)",
+    "claude-sonnet-5-5-high": "Claude Sonnet 5.5 (High)",
+    "claude-opus-5-5-low": "Claude Opus 5.5 (Low)",
+    "claude-opus-5-5-medium": "Claude Opus 5.5 (Medium)",
+    "claude-opus-5-5-high": "Claude Opus 5.5 (High)",
+    "gpt-oss-120b-medium": "GPT-OSS 120B (Medium)",
+}
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07")
+_MODEL_LINE_RE = re.compile(r"^([a-zA-Z0-9][a-zA-Z0-9._-]*)\s{2,}(.+)$")
+_AGY_MODELS_CACHE: dict[str, str] | None = None
+_AGY_MODELS_CACHE_TS: float = 0.0
+_AGY_MODELS_CACHE_TTL: float = 3600.0
+
+
+def _resolve_agy_binary() -> str | None:
+    if settings.agy_path and os.path.exists(settings.agy_path):
+        return settings.agy_path
+    search_paths = [
+        os.environ.get("PATH", ""),
+        "/home/steve/.local/bin",
+        os.path.expanduser("~/.local/bin"),
+    ]
+    combined_path = os.pathsep.join(p for p in search_paths if p)
+    found = shutil.which("agy", path=combined_path)
+    if found:
+        return found
+    fallback = "/home/steve/.local/bin/agy"
+    if os.path.exists(fallback):
+        return fallback
+    return None
+
+
+def _parse_agy_models_output(raw_output: str) -> dict[str, str]:
+    cleaned = _ANSI_ESCAPE_RE.sub("", raw_output or "")
+    parsed: dict[str, str] = {}
+    for raw_line in cleaned.splitlines():
+        # Strip carriage-return spinner frames on the same line
+        segments = raw_line.split("\r")
+        line = segments[-1].strip() if segments else ""
+        if not line or "fetching available models" in line.lower():
+            continue
+        match = _MODEL_LINE_RE.match(line)
+        if match:
+            model_id = match.group(1).strip()
+            display_name = match.group(2).strip()
+            if model_id and display_name:
+                parsed[model_id] = display_name
+    return parsed
+
+
+def discover_agy_models(force_refresh: bool = False) -> dict[str, str]:
+    """Discover available agy models via `agy models` with 3600s cache and fallback."""
+    global _AGY_MODELS_CACHE, _AGY_MODELS_CACHE_TS
+
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _AGY_MODELS_CACHE is not None
+        and (now - _AGY_MODELS_CACHE_TS) < _AGY_MODELS_CACHE_TTL
+    ):
+        return dict(_AGY_MODELS_CACHE)
+
+    models: dict[str, str] = dict(DEFAULT_AGY_MODELS)
+    agy_bin = _resolve_agy_binary()
+    if agy_bin:
+        env = os.environ.copy()
+        local_bin = "/home/steve/.local/bin"
+        if local_bin not in env.get("PATH", ""):
+            env["PATH"] = f"{local_bin}{os.pathsep}{env.get('PATH', '')}"
+        try:
+            proc = subprocess.run(
+                [agy_bin, "models"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+                check=False,
+            )
+            if proc.returncode == 0 and proc.stdout:
+                discovered = _parse_agy_models_output(proc.stdout)
+                if discovered:
+                    models.update(discovered)
+        except Exception:
+            pass
+
+    _AGY_MODELS_CACHE = dict(models)
+    _AGY_MODELS_CACHE_TS = now
+    return dict(models)
+
 
 def normalize_agy_model(model: str | None) -> str:
-    """Normalize incoming model alias to canonical agy model string."""
+    """Normalize incoming model alias or ID to canonical agy model Display Name."""
     if not model:
         return settings.agy_default_model
-    m = model.lower().strip()
+
+    raw = model.strip()
+    for prefix in ("openai/", "litellm/"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :].strip()
+            break
+
+    if not raw:
+        return settings.agy_default_model
+
+    m = raw.lower()
     if m in ["agy", "default", "auto", "agy-gemini"]:
         return settings.agy_default_model
+
+    # Check exact match (case-insensitive) against discovered model IDs or Display Names
+    discovered = discover_agy_models()
+    for model_id, display_name in discovered.items():
+        if m == model_id.lower() or m == display_name.lower():
+            return display_name
+
+    # Argon family matching (check before generic "gemini" matching)
+    if "argon" in m:
+        if "high" in m:
+            return "Gemini 4 Argon (High)"
+        if "low" in m:
+            return "Gemini 4 Argon (Low)"
+        return "Gemini 4 Argon (Medium)"
+
     if "opus" in m:
+        if m == "agy-opus" or "high" in m:
+            return "Claude Opus 5.5 (High)"
+        if "low" in m:
+            return "Claude Opus 5.5 (Low)"
         return "Claude Opus 5.5 (Medium)"
+
     if "sonnet" in m or "claude" in m:
+        if m == "agy-sonnet" or "high" in m:
+            return "Claude Sonnet 5.5 (High)"
+        if "low" in m:
+            return "Claude Sonnet 5.5 (Low)"
         return "Claude Sonnet 5.5 (Medium)"
+
     if "oss" in m or "gpt" in m:
         return "GPT-OSS 120B (Medium)"
+
     if "gemini" in m or "flash" in m:
         if "low" in m:
             return "Gemini 3.8 Flash (Low)"
         if "high" in m:
             return "Gemini 3.8 Flash (High)"
         return "Gemini 3.8 Flash (Medium)"
-    return model
+
+    return raw
 
 
 class AgyExecutor(BaseExecutor):

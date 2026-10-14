@@ -1,9 +1,14 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from cli_agent_dispatch.core.models import ExecutorType, TaskRequest
-from cli_agent_dispatch.executors.agy import AgyExecutor, normalize_agy_model
+from cli_agent_dispatch.executors.agy import (
+    DEFAULT_AGY_MODELS,
+    AgyExecutor,
+    discover_agy_models,
+    normalize_agy_model,
+)
 
 
 def test_normalize_agy_model():
@@ -16,6 +21,40 @@ def test_normalize_agy_model():
     assert normalize_agy_model("gemini-flash-low") == "Gemini 3.8 Flash (Low)"
     assert normalize_agy_model("gemini-flash-high") == "Gemini 3.8 Flash (High)"
     assert normalize_agy_model("custom-exact-name") == "custom-exact-name"
+
+    # Exact IDs & Argon models
+    assert normalize_agy_model("gemini-4-argon-medium") == "Gemini 4 Argon (Medium)"
+    assert normalize_agy_model("gemini-4-argon-high") == "Gemini 4 Argon (High)"
+    assert normalize_agy_model("gemini-4-argon-low") == "Gemini 4 Argon (Low)"
+    assert normalize_agy_model("agy-argon") == "Gemini 4 Argon (Medium)"
+    assert normalize_agy_model("agy-argon-high") == "Gemini 4 Argon (High)"
+    assert normalize_agy_model("agy-argon-low") == "Gemini 4 Argon (Low)"
+    assert normalize_agy_model("argon") == "Gemini 4 Argon (Medium)"
+    assert normalize_agy_model("agy-opus") == "Claude Opus 5.5 (High)"
+    assert normalize_agy_model("agy-sonnet") == "Claude Sonnet 5.5 (High)"
+    assert normalize_agy_model("openai/gemini-4-argon-medium") == "Gemini 4 Argon (Medium)"
+    assert normalize_agy_model("litellm/agy-argon-high") == "Gemini 4 Argon (High)"
+
+
+def test_discover_agy_models_parses_spinner_and_ansi():
+    fake_stdout = (
+        "\r\x1b[36m⠋\x1b[0m Fetching available models..."
+        "\r\x1b[36m⠙\x1b[0m Fetching available models...\r"
+        "gemini-4-argon-medium     Gemini 4 Argon (Medium)\n"
+        "gemini-4-argon-high       Gemini 4 Argon (High)\n"
+        "custom-agy-exp-high       Custom Experimental (High)\n"
+    )
+    mock_proc = MagicMock(returncode=0, stdout=fake_stdout, stderr="")
+    with (
+        patch("cli_agent_dispatch.executors.agy._resolve_agy_binary", return_value="/usr/bin/agy"),
+        patch("subprocess.run", return_value=mock_proc),
+    ):
+        models = discover_agy_models(force_refresh=True)
+
+    for k, v in DEFAULT_AGY_MODELS.items():
+        assert models[k] == v
+    assert models["custom-agy-exp-high"] == "Custom Experimental (High)"
+    assert normalize_agy_model("custom-agy-exp-high") == "Custom Experimental (High)"
 
 
 @pytest.mark.asyncio
