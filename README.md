@@ -1,6 +1,6 @@
-# CLIAgentDispatch (v0.3.2)
+# CLIAgentDispatch (v0.3.3)
 
-[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.3.3-blue.svg)](pyproject.toml)
 [![Python Version](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![FastMCP](https://img.shields.io/badge/MCP-FastMCP-orange.svg)](https://modelcontextprotocol.io/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-green.svg)](https://fastapi.tiangolo.com/)

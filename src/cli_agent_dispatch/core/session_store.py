@@ -33,21 +33,32 @@ class SessionStore:
         self.default_ttl = default_ttl_seconds
         self._sessions: dict[str, SessionRecord] = {}
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        self._cancelled_runs: set[str] = set()
         self._lock = asyncio.Lock()
 
     def register_process(self, client_id: str, proc: asyncio.subprocess.Process) -> None:
-        """Register a running OS subprocess associated with a session."""
+        """Register a running OS subprocess associated with a session or run ID."""
         self._active_processes[client_id] = proc
+        self._cancelled_runs.discard(client_id)
 
     def unregister_process(self, client_id: str) -> None:
         """Unregister an OS subprocess once execution completes."""
         self._active_processes.pop(client_id, None)
+
+    def was_cancelled(self, client_id: str) -> bool:
+        """Return True if a run/session was explicitly cancelled by user."""
+        return client_id in self._cancelled_runs
+
+    def active_process_ids(self) -> list[str]:
+        """Return list of currently active process keys."""
+        return [k for k, proc in list(self._active_processes.items()) if proc.returncode is None]
 
     async def kill_active_process(self, client_id: str) -> bool:
         """Terminate and kill any running OS subprocess for a session."""
         proc = self._active_processes.pop(client_id, None)
         if not proc:
             return False
+        self._cancelled_runs.add(client_id)
         try:
             if proc.returncode is None:
                 proc.terminate()
@@ -59,6 +70,15 @@ class SessionStore:
             return True
         except Exception:
             return False
+
+    async def cancel_all_active(self) -> list[str]:
+        """Terminate and kill all currently running OS subprocesses across active turns."""
+        cancelled: list[str] = []
+        active_keys = list(self._active_processes.keys())
+        for key in active_keys:
+            if await self.kill_active_process(key):
+                cancelled.append(key)
+        return cancelled
 
     async def get(self, client_id: str) -> SessionRecord | None:
         """Retrieve a session by its client ID, updating touch if valid."""

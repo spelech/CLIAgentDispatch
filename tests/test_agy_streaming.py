@@ -105,3 +105,168 @@ async def test_agy_execute_stream_binary_not_found():
     assert len(chunks) == 1
     assert chunks[0].is_final is True
     assert "not found" in chunks[0].delta
+
+
+def test_format_agy_tool_step():
+    from cli_agent_dispatch.executors.agy import format_agy_tool_step
+
+    active_cmd = {
+        "step_index": 3,
+        "state": "ACTIVE",
+        "step_type": "tool",
+        "tool_name": "run_command",
+        "tool_info": {
+            "name": "run_command",
+            "parameters": {
+                "CommandLine": "openclaw-updates check",
+                "Cwd": "/containers/ai/openclaw",
+            },
+        },
+    }
+    res = format_agy_tool_step(active_cmd)
+    assert res is not None
+    reasoning_line, card_step = res
+    assert "run_command" in reasoning_line
+    assert "openclaw-updates check" in reasoning_line
+    assert card_step["state"] == "ACTIVE"
+    assert card_step["icon"] == "🛠️"
+
+    done_cmd = {
+        "step_index": 3,
+        "state": "DONE",
+        "step_type": "tool",
+        "tool_name": "run_command",
+        "duration_seconds": 1.25,
+        "tool_info": {"name": "run_command", "parameters": {}},
+    }
+    res_done = format_agy_tool_step(done_cmd)
+    assert res_done is not None
+    r_done, c_done = res_done
+    assert "1.2s" in r_done or "1.3s" in r_done
+    assert c_done["state"] == "DONE"
+    assert c_done["duration"] == 1.25
+
+
+def test_resolve_openclaw_posture(tmp_path):
+    import json
+
+    from cli_agent_dispatch.executors.agy import resolve_openclaw_posture
+
+    leases_file = tmp_path / "mode_leases.json"
+    leases_file.write_text(
+        json.dumps(
+            {
+                "global": {
+                    "mode": "plan",
+                    "scope": "infra",
+                    "until": None,
+                    "revert_to_mode": "normal",
+                    "revert_to_scope": "home",
+                },
+                "sessions": {
+                    "agent:main:thread1": {
+                        "mode": "autopilot",
+                        "scope": "all",
+                        "until": None,
+                    }
+                },
+            }
+        )
+    )
+
+    mode, scope, flags, guardrail = resolve_openclaw_posture(
+        "Runtime: agent=main | session=agent:main:main | channel=slack",
+        leases_path=str(leases_file),
+    )
+    assert mode == "plan"
+    assert scope == "infra"
+    assert flags == ["--mode", "plan"]
+    assert "PLAN (READ-ONLY)" in guardrail
+
+    mode_s, scope_s, flags_s, guardrail_s = resolve_openclaw_posture(
+        "Runtime: agent=main | session=agent:main:thread1 | channel=slack",
+        leases_path=str(leases_file),
+    )
+    assert mode_s == "autopilot"
+    assert scope_s == "all"
+    assert "--dangerously-skip-permissions" in flags_s
+    assert "AUTOPILOT" in guardrail_s
+
+
+@pytest.mark.asyncio
+async def test_slack_activity_tracker_posts_and_finalizes():
+    from cli_agent_dispatch.executors.agy import SlackActivityTracker, format_agy_tool_step
+
+    tracker = SlackActivityTracker(
+        run_id="run_test_123",
+        model="Gemini 4 Argon (Medium)",
+        mode="normal",
+        scope="home",
+        prompt="Runtime: agent=main | channel=slack",
+        enabled=True,
+    )
+    tracker.token = "xoxb-fake-token"
+    tracker.enabled = True
+
+    calls = []
+
+    def fake_api_call(method, payload):
+        calls.append((method, payload))
+        return {"ok": True, "ts": "1700000000.123456"}
+
+    tracker._slack_api_call_sync = fake_api_call
+
+    _, step1 = format_agy_tool_step(
+        {
+            "step_index": 1,
+            "state": "ACTIVE",
+            "step_type": "tool",
+            "tool_name": "view_file",
+            "tool_info": {"parameters": {"AbsolutePath": "/containers/README.md"}},
+        }
+    )
+    await tracker.record_step(step1)
+    assert tracker.message_ts == "1700000000.123456"
+    assert calls[0][0] == "chat.postMessage"
+    assert any(
+        b.get("type") == "actions"
+        and any(el.get("action_id") == "abort_agy_turn" for el in b.get("elements", []))
+        for b in calls[0][1]["blocks"]
+    )
+
+    await tracker.finalize(status="aborted")
+    assert calls[-1][0] == "chat.update"
+    assert "Turn Aborted by User" in calls[-1][1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_agy_execute_stream_emits_reasoning_delta_for_tools(tmp_path):
+    fake_agy = tmp_path / "agy"
+    script = (
+        "#!/bin/sh\n"
+        'echo \'{"event":"init","conversation_id":"conv-tools-1"}\'\n'
+        'echo \'{"event":"step_update","step_update":{"conversation_id":"conv-tools-1","step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"view_file","tool_info":{"name":"view_file","parameters":{"AbsolutePath":"/containers/ai/openclaw/VERSION"}}}}\'\n'
+        'echo \'{"event":"step_update","step_update":{"conversation_id":"conv-tools-1","step_index":1,"state":"DONE","step_type":"tool","tool_name":"view_file","duration_seconds":0.05,"tool_info":{"name":"view_file","parameters":{"AbsolutePath":"/containers/ai/openclaw/VERSION"}}}}\'\n'
+        'echo \'{"event":"step_update","step_update":{"conversation_id":"conv-tools-1","text_delta":"Version is 0.1.4"}}\'\n'
+        'echo \'{"event":"result","result":{"conversation_id":"conv-tools-1","status":"DONE","response":"Version is 0.1.4"}}\'\n'
+    )
+    fake_agy.write_text(script)
+    fake_agy.chmod(0o755)
+
+    executor = AgyExecutor()
+    req = TaskRequest(
+        prompt="Check version",
+        executor=ExecutorType.AGY,
+        workspace=str(tmp_path),
+    )
+
+    with patch("cli_agent_dispatch.executors.agy.settings.agy_path", str(fake_agy)):
+        chunks = [c async for c in executor.execute_stream(req)]
+
+    reasoning_chunks = [c.reasoning_delta for c in chunks if c.reasoning_delta]
+    assert len(reasoning_chunks) == 2
+    assert "view_file" in reasoning_chunks[0]
+    assert "/containers/ai/openclaw/VERSION" in reasoning_chunks[0]
+    assert "done" in reasoning_chunks[1]
+    text_deltas = "".join(c.delta for c in chunks)
+    assert "Version is 0.1.4" in text_deltas

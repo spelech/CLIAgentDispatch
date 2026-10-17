@@ -141,6 +141,25 @@ async def _stream_chat_completion_sse(
                 native_session_id=chunk.session_id,
             )
 
+        if chunk.reasoning_delta:
+            reasoning_payload = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "reasoning_content": chunk.reasoning_delta,
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            }
+            yield f"data: {json.dumps(reasoning_payload)}\n\n"
+
         if chunk.delta:
             payload = {
                 "id": completion_id,
