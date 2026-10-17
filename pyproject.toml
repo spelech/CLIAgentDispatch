@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cli-agent-dispatch"
-version = "0.3.2"
+version = "0.3.3"
 description = "Universal CLI & Headless AI Agent Delegation Engine for MCG, LiteLLM, and OpenClaw"
 readme = "README.md"
 requires-python = ">=3.12"

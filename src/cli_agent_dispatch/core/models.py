@@ -158,6 +158,10 @@ class SessionMessageRequest(BaseModel):
 
 class StreamChunk(BaseModel):
     delta: str = Field(default="", description="Incremental text token or chunk.")
+    reasoning_delta: str = Field(
+        default="",
+        description="Incremental reasoning or intermediate tool execution progress delta.",
+    )
     is_final: bool = Field(
         default=False, description="Whether this is the final termination chunk."
     )

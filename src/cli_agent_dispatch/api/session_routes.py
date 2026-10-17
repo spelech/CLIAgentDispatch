@@ -13,6 +13,7 @@ from cli_agent_dispatch.core.models import (
     TaskRequest,
     TaskResult,
 )
+from cli_agent_dispatch.core.session_store import session_store
 
 logger = logging.getLogger("CLIAgentDispatch.SessionRoutes")
 
@@ -92,6 +93,52 @@ async def create_session(
         "executor": result.executor,
         "status": "ready",
         "output": result.output,
+    }
+
+
+@router.get("/sessions/active")
+async def list_active_processes() -> dict[str, list[str] | int]:
+    """List currently running executor subprocess IDs."""
+    active_ids = session_store.active_process_ids()
+    return {
+        "active_ids": active_ids,
+        "count": len(active_ids),
+    }
+
+
+@router.post("/sessions/cancel-active")
+async def cancel_all_active_sessions() -> dict[str, list[str] | int | str]:
+    """Immediately terminate all currently running agent turns/subprocesses."""
+    cancelled = await session_store.cancel_all_active()
+    logger.warning(f"Cancelled active agent subprocesses: {cancelled}")
+    return {
+        "status": "cancelled",
+        "cancelled_ids": cancelled,
+        "count": len(cancelled),
+    }
+
+
+@router.post("/sessions/{session_id}/cancel")
+async def cancel_session(session_id: str) -> dict[str, str | bool | list[str]]:
+    """Terminate an active subprocess for a specific session or run ID."""
+    if session_id in ("all", "active"):
+        cancelled = await session_store.cancel_all_active()
+        return {
+            "status": "cancelled",
+            "session_id": session_id,
+            "cancelled": bool(cancelled),
+            "cancelled_ids": cancelled,
+        }
+    killed = await session_store.kill_active_process(session_id)
+    if not killed:
+        # Fallback: check if client_id maps to a native_session_id with an active process
+        record = await session_store.get(session_id)
+        if record and record.native_session_id:
+            killed = await session_store.kill_active_process(record.native_session_id)
+    return {
+        "status": "cancelled" if killed else "not_running",
+        "session_id": session_id,
+        "cancelled": killed,
     }
 
 

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "CLIAgentDispatch"
-    app_version: str = "0.3.2"
+    app_version: str = "0.3.3"
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8032, alias="PORT")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
