@@ -16,6 +16,9 @@ from cli_agent_dispatch.core.models import (
     ExecutorType,
     StreamChunk,
     TaskRequest,
+    format_image_attachment_directive,
+    normalize_container_media_paths,
+    save_attached_image,
 )
 from cli_agent_dispatch.core.session_store import session_store
 
@@ -23,18 +26,25 @@ router = APIRouter(prefix="/v1", tags=["Anthropic Compatibility"])
 
 
 def _extract_text_content(content: str | list[Any]) -> str:
-    """Extract string content from string or Anthropic content block list."""
+    """Extract string content (and decoded image directives) from string or Anthropic content block list."""
     if isinstance(content, str):
-        return content
+        return normalize_container_media_paths(content)
     if isinstance(content, list):
         parts = []
         for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                parts.append(item.get("text", ""))
+            if isinstance(item, dict):
+                item_type = str(item.get("type", "")).lower()
+                if item_type == "text":
+                    parts.append(normalize_container_media_paths(str(item.get("text", ""))))
+                elif item_type in ("image", "image_url", "input_image") or "image_url" in item:
+                    img_src = item.get("source") or item.get("image_url") or item.get("url") or item
+                    saved_path = save_attached_image(img_src)
+                    if saved_path:
+                        parts.append(format_image_attachment_directive(saved_path))
             elif hasattr(item, "text"):
-                parts.append(str(item.text))
+                parts.append(normalize_container_media_paths(str(item.text)))
         return "\n".join(parts)
-    return str(content)
+    return normalize_container_media_paths(str(content))
 
 
 def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | None]:

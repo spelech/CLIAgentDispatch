@@ -1,3 +1,8 @@
+import base64
+import hashlib
+import os
+import re
+import urllib.request
 from enum import StrEnum
 from typing import Any
 
@@ -172,6 +177,155 @@ class StreamChunk(BaseModel):
     )
 
 
+# --- Multimodal Image Attachment & Media Path Helpers ---
+
+_MIME_TO_EXT = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "application/pdf": "pdf",
+}
+
+_DATA_URL_RE = re.compile(r"^data:(?P<mime>[a-zA-Z0-9.+/-]+);base64,(?P<data>[A-Za-z0-9+/=\s]+)$")
+
+
+def resolve_upload_dir(upload_dir: str | None = None) -> str:
+    """Resolve writable directory for decoded image/file attachments."""
+    target = upload_dir or os.environ.get(
+        "CLI_AGENT_DISPATCH_UPLOAD_DIR", "/containers/ai/openclaw/data/uploads"
+    )
+    try:
+        os.makedirs(target, exist_ok=True)
+        return target
+    except OSError:
+        fallback = "/tmp/cli-agent-dispatch-uploads"
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+
+
+def normalize_container_media_paths(text: str) -> str:
+    """Translate OpenClaw container-internal media paths to host-accessible paths for agy."""
+    if not text:
+        return text
+    out = text.replace(
+        "/home/node/.openclaw/media/", "/containers/ai/openclaw/data/uploads/slack_media/"
+    )
+    out = re.sub(
+        r"(?<![A-Za-z0-9_.-])/app/data/",
+        "/containers/ai/openclaw/data/",
+        out,
+    )
+    return out
+
+
+def _read_slack_bot_token() -> str:
+    token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+    if token:
+        return token
+    env_file = "/containers/ai/openclaw/.env"
+    if os.path.exists(env_file):
+        try:
+            with open(env_file, encoding="utf-8") as f:
+                for line in f:
+                    s = line.strip()
+                    if s.startswith("SLACK_BOT_TOKEN="):
+                        return s.split("=", 1)[1].strip().strip('"').strip("'")
+        except OSError:
+            pass
+    return ""
+
+
+def save_attached_image(
+    image_source: str | dict[str, Any], upload_dir: str | None = None
+) -> str | None:
+    """
+    Persist an inbound multimodal image attachment (data URL, Anthropic base64 block,
+    local path, or HTTP/Slack URL) to disk so `agy` can inspect it with `view_file`.
+    """
+    target_dir = resolve_upload_dir(upload_dir)
+    raw_bytes: bytes | None = None
+    ext = "png"
+
+    if isinstance(image_source, dict):
+        # Anthropic base64 block: {"type": "base64", "media_type": "image/png", "data": "..."}
+        src_type = str(image_source.get("type", "")).lower()
+        if src_type == "base64" or ("data" in image_source and "media_type" in image_source):
+            media_type = str(image_source.get("media_type", "image/png")).lower().strip()
+            ext = _MIME_TO_EXT.get(media_type, "png")
+            b64_data = str(image_source.get("data", "")).strip()
+            if b64_data:
+                try:
+                    raw_bytes = base64.b64decode(b64_data)
+                except Exception:
+                    return None
+        else:
+            # OpenAI image_url dict: {"url": "..."}
+            url_val = image_source.get("url") or image_source.get("path") or ""
+            if isinstance(url_val, str) and url_val:
+                return save_attached_image(url_val, upload_dir=target_dir)
+            return None
+    elif isinstance(image_source, str):
+        src = image_source.strip()
+        if not src:
+            return None
+        m = _DATA_URL_RE.match(src)
+        if m:
+            mime = m.group("mime").lower().strip()
+            ext = _MIME_TO_EXT.get(mime, mime.split("/")[-1] if "/" in mime else "png")
+            if ext == "jpeg":
+                ext = "jpg"
+            try:
+                raw_bytes = base64.b64decode(m.group("data"))
+            except Exception:
+                return None
+        elif src.startswith("file://"):
+            local_path = normalize_container_media_paths(src[len("file://") :])
+            if os.path.exists(local_path):
+                return local_path
+            return None
+        elif src.startswith("/"):
+            local_path = normalize_container_media_paths(src)
+            if os.path.exists(local_path):
+                return local_path
+            return None
+        elif src.startswith(("http://", "https://")):
+            headers: dict[str, str] = {"User-Agent": "CLIAgentDispatch/0.3"}
+            if "slack.com" in src:
+                slack_token = _read_slack_bot_token()
+                if slack_token:
+                    headers["Authorization"] = f"Bearer {slack_token}"
+            try:
+                req = urllib.request.Request(src, headers=headers)
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    ctype = (
+                        (resp.headers.get("Content-Type") or "image/png")
+                        .split(";")[0]
+                        .strip()
+                        .lower()
+                    )
+                    ext = _MIME_TO_EXT.get(ctype, "png")
+                    raw_bytes = resp.read()
+            except Exception:
+                return None
+
+    if not raw_bytes:
+        return None
+
+    digest = hashlib.sha256(raw_bytes).hexdigest()[:12]
+    filename = f"img_{digest}.{ext}"
+    out_path = os.path.join(target_dir, filename)
+    if not os.path.exists(out_path):
+        with open(out_path, "wb") as f:
+            f.write(raw_bytes)
+    return out_path
+
+
+def format_image_attachment_directive(saved_path: str) -> str:
+    return f"[Attached Image: {saved_path} — use view_file to inspect this image]"
+
+
 # --- OpenAI Compatibility Schemas ---
 
 
@@ -187,18 +341,27 @@ class ChatCompletionMessage(BaseModel):
         if v is None:
             return ""
         if isinstance(v, str):
-            return v
+            return normalize_container_media_paths(v)
         if isinstance(v, list):
             parts: list[str] = []
             for item in v:
                 if isinstance(item, str):
-                    parts.append(item)
+                    parts.append(normalize_container_media_paths(item))
                 elif isinstance(item, dict):
+                    item_type = str(item.get("type", "")).lower()
+                    if item_type in ("image_url", "input_image", "image") or "image_url" in item:
+                        img_src = (
+                            item.get("image_url") or item.get("source") or item.get("url") or item
+                        )
+                        saved_path = save_attached_image(img_src)
+                        if saved_path:
+                            parts.append(format_image_attachment_directive(saved_path))
+                        continue
                     text_val = item.get("text") or item.get("content") or ""
                     if isinstance(text_val, str) and text_val:
-                        parts.append(text_val)
+                        parts.append(normalize_container_media_paths(text_val))
             return "\n".join(parts)
-        return str(v)
+        return normalize_container_media_paths(str(v))
 
 
 class ChatCompletionRequest(BaseModel):
@@ -289,3 +452,26 @@ class AnthropicMessagesResponse(BaseModel):
     stop_reason: str | None = "end_turn"
     stop_sequence: str | None = None
     usage: AnthropicUsage = Field(default_factory=AnthropicUsage)
+
+
+# --- Headless UI Preview Screenshot Schemas ---
+
+
+class ScreenshotRequest(BaseModel):
+    url: str = Field(..., description="Target preview or localhost URL to capture.")
+    output_path: str | None = Field(
+        default=None, description="Optional destination path for the PNG screenshot."
+    )
+    width: int = Field(default=1280, ge=240, le=3840)
+    height: int = Field(default=800, ge=240, le=3840)
+    full_page: bool = Field(default=False)
+    wait_ms: int = Field(default=800, ge=0, le=15000)
+    mobile: bool = Field(default=False, description="Use mobile viewport (390x844, 2x scale).")
+
+
+class ScreenshotResponse(BaseModel):
+    success: bool
+    path: str | None = None
+    rendered_url: str | None = None
+    size_bytes: int = 0
+    error: str | None = None
