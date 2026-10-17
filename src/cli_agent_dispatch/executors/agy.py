@@ -198,22 +198,41 @@ class AgyExecutor(BaseExecutor):
             workspace = os.getcwd()
 
         # Handle system_prompt on turn 1 (session_id is None)
-        if not request.session_id and request.system_prompt:
+        if (
+            not request.session_id
+            and request.system_prompt
+            and request.system_prompt not in request.prompt
+        ):
             prompt = f"{request.system_prompt}\n\n{request.prompt}"
         else:
             prompt = request.prompt
 
+        use_stdin = len(prompt.encode("utf-8")) > 100_000
         cmd = [
             agy_path,
             "--model",
             model,
             "--dangerously-skip-permissions",
-            "--output-format",
-            "json",
         ]
         if request.session_id:
             cmd.extend(["--conversation", request.session_id])
-        cmd.extend(["--print", prompt])
+        if use_stdin:
+            cmd.extend(
+                [
+                    "--input-format",
+                    "stream-json",
+                    "--output-format",
+                    "stream-json",
+                    "--print",
+                    "",
+                ]
+            )
+            stdin_bytes = (
+                json.dumps({"event": "user", "message": {"content": prompt}}) + "\n"
+            ).encode("utf-8")
+        else:
+            cmd.extend(["--output-format", "json", "--print", prompt])
+            stdin_bytes = None
 
         env = os.environ.copy()
         if workspace:
@@ -224,13 +243,16 @@ class AgyExecutor(BaseExecutor):
                 *cmd,
                 cwd=workspace,
                 env=env,
+                stdin=asyncio.subprocess.PIPE if use_stdin else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             if request.session_id:
                 session_store.register_process(request.session_id, process)
             try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(input=stdin_bytes), timeout=timeout
+                )
             finally:
                 if request.session_id:
                     session_store.unregister_process(request.session_id)
@@ -243,14 +265,20 @@ class AgyExecutor(BaseExecutor):
                 metadata = {"model": model, "workspace": workspace}
 
                 try:
-                    data = json.loads(raw_stdout.strip())
+                    lines = [ln.strip() for ln in raw_stdout.splitlines() if ln.strip()]
+                    data = json.loads(lines[-1] if use_stdin and lines else raw_stdout.strip())
                     if isinstance(data, dict):
-                        if "conversation_id" in data and data["conversation_id"]:
+                        res_obj = (
+                            data.get("result") if isinstance(data.get("result"), dict) else data
+                        )
+                        if "conversation_id" in res_obj and res_obj["conversation_id"]:
+                            session_id = res_obj["conversation_id"]
+                        elif "conversation_id" in data and data["conversation_id"]:
                             session_id = data["conversation_id"]
-                        if "response" in data and data["response"] is not None:
-                            output_text = str(data["response"])
-                        if "num_turns" in data:
-                            metadata["num_turns"] = data["num_turns"]
+                        if "response" in res_obj and res_obj["response"] is not None:
+                            output_text = str(res_obj["response"])
+                        if "num_turns" in res_obj:
+                            metadata["num_turns"] = res_obj["num_turns"]
                 except (json.JSONDecodeError, TypeError, ValueError):
                     output_text = raw_stdout
 
@@ -317,22 +345,37 @@ class AgyExecutor(BaseExecutor):
         if workspace and not os.path.exists(workspace):
             workspace = os.getcwd()
 
-        if not request.session_id and request.system_prompt:
+        if (
+            not request.session_id
+            and request.system_prompt
+            and request.system_prompt not in request.prompt
+        ):
             prompt = f"{request.system_prompt}\n\n{request.prompt}"
         else:
             prompt = request.prompt
 
+        use_stdin = len(prompt.encode("utf-8")) > 100_000
         cmd = [
             agy_path,
             "--model",
             model,
             "--dangerously-skip-permissions",
-            "--output-format",
-            "stream-json",
         ]
         if request.session_id:
             cmd.extend(["--conversation", request.session_id])
-        cmd.extend(["--print", prompt])
+        if use_stdin:
+            cmd.extend(
+                [
+                    "--input-format",
+                    "stream-json",
+                    "--output-format",
+                    "stream-json",
+                    "--print",
+                    "",
+                ]
+            )
+        else:
+            cmd.extend(["--output-format", "stream-json", "--print", prompt])
 
         process = None
         session_id = request.session_id
@@ -340,13 +383,22 @@ class AgyExecutor(BaseExecutor):
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=workspace,
+                stdin=asyncio.subprocess.PIPE if use_stdin else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            if use_stdin and process.stdin is not None:
+                payload_line = (
+                    json.dumps({"event": "user", "message": {"content": prompt}}) + "\n"
+                ).encode("utf-8")
+                process.stdin.write(payload_line)
+                await process.stdin.drain()
+                process.stdin.close()
 
             async def _stream_reader():
                 nonlocal session_id
                 assert process.stdout is not None
+                yielded_deltas = False
                 while True:
                     line = await process.stdout.readline()
                     if not line:
@@ -357,7 +409,7 @@ class AgyExecutor(BaseExecutor):
                     try:
                         data = json.loads(line_str)
                         if isinstance(data, dict):
-                            event_type = data.get("type")
+                            event_type = data.get("event") or data.get("type")
                             if "conversation_id" in data and data["conversation_id"]:
                                 session_id = data["conversation_id"]
 
@@ -365,11 +417,43 @@ class AgyExecutor(BaseExecutor):
                                 if session_id:
                                     yield StreamChunk(delta="", session_id=session_id)
                             elif event_type == "step_update":
-                                delta_text = data.get("text_delta") or data.get("delta") or ""
+                                step_obj = (
+                                    data.get("step_update")
+                                    if isinstance(data.get("step_update"), dict)
+                                    else data
+                                )
+                                if "conversation_id" in step_obj and step_obj["conversation_id"]:
+                                    session_id = step_obj["conversation_id"]
+                                delta_text = (
+                                    step_obj.get("text_delta") or step_obj.get("delta") or ""
+                                )
                                 if delta_text:
+                                    yielded_deltas = True
                                     yield StreamChunk(delta=delta_text, session_id=session_id)
                             elif event_type == "result":
-                                usage = data.get("usage")
+                                res_obj = (
+                                    data.get("result")
+                                    if isinstance(data.get("result"), dict)
+                                    else data
+                                )
+                                if "conversation_id" in res_obj and res_obj["conversation_id"]:
+                                    session_id = res_obj["conversation_id"]
+                                usage = res_obj.get("usage") or data.get("usage")
+                                if res_obj.get("status") == "ERROR":
+                                    err_detail = res_obj.get("error") or "agy stream error"
+                                    yield StreamChunk(
+                                        delta=f"[agy error: {err_detail}]",
+                                        is_final=True,
+                                        session_id=session_id,
+                                        finish_reason="error",
+                                        usage=usage,
+                                    )
+                                    return
+                                if not yielded_deltas and res_obj.get("response"):
+                                    yield StreamChunk(
+                                        delta=str(res_obj["response"]),
+                                        session_id=session_id,
+                                    )
                                 yield StreamChunk(
                                     delta="",
                                     is_final=True,
@@ -379,14 +463,18 @@ class AgyExecutor(BaseExecutor):
                                 )
                                 return
                             elif "text_delta" in data:
+                                yielded_deltas = True
                                 yield StreamChunk(delta=data["text_delta"], session_id=session_id)
                             elif "response" in data and data["response"]:
+                                yielded_deltas = True
                                 yield StreamChunk(
                                     delta=str(data["response"]), session_id=session_id
                                 )
                             continue
                     except (json.JSONDecodeError, TypeError, ValueError):
                         pass
+                    if line_str.startswith("AGY_ERROR:") or line_str.startswith("error:"):
+                        continue
                     yield StreamChunk(delta=f"{line_str}\n", session_id=session_id)
 
             async for chunk in _stream_reader():
