@@ -1,4 +1,5 @@
 import base64
+import json
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
@@ -103,10 +104,11 @@ def test_normalize_preview_url():
 
 def test_screenshot_endpoint(tmp_path, monkeypatch):
     monkeypatch.setenv("CLI_AGENT_DISPATCH_UPLOAD_DIR", str(tmp_path))
-    out_file = tmp_path / "captured.png"
 
     async def fake_exec(*args, **kwargs):
-        out_file.write_bytes(SAMPLE_PNG_BYTES)
+        cfg = json.loads(args[3])
+        with open(cfg["out_path"], "wb") as f:
+            f.write(SAMPLE_PNG_BYTES)
         proc = AsyncMock()
         proc.returncode = 0
         proc.communicate = AsyncMock(return_value=(b"", b""))
@@ -121,7 +123,6 @@ def test_screenshot_endpoint(tmp_path, monkeypatch):
             "/v1/screenshot",
             json={
                 "url": "https://preview.wileyriley.com/demo-slot/",
-                "output_path": str(out_file),
                 "mobile": True,
             },
         )
@@ -129,5 +130,6 @@ def test_screenshot_endpoint(tmp_path, monkeypatch):
         data = resp.json()
         assert data["success"] is True
         assert data["rendered_url"] == "http://preview.lan/demo-slot/"
-        assert data["path"] == str(out_file)
+        assert data["path"].startswith(str(tmp_path))
+        assert data["path"].endswith("_mobile.png")
         assert data["size_bytes"] == len(SAMPLE_PNG_BYTES)

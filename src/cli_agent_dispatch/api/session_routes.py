@@ -20,7 +20,6 @@ from cli_agent_dispatch.core.models import (
     SessionMessageRequest,
     TaskRequest,
     TaskResult,
-    normalize_container_media_paths,
     resolve_upload_dir,
 )
 from cli_agent_dispatch.core.session_store import session_store
@@ -210,13 +209,9 @@ def normalize_preview_url(url: str) -> str:
 async def capture_screenshot(request: ScreenshotRequest) -> ScreenshotResponse:
     """Capture a headless Chromium screenshot of a preview or local dev URL via Playwright."""
     rendered_url = normalize_preview_url(request.url)
-    if request.output_path:
-        out_path = normalize_container_media_paths(request.output_path)
-        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    else:
-        upload_dir = resolve_upload_dir()
-        suffix = "mobile" if request.mobile else "desktop"
-        out_path = os.path.join(upload_dir, f"preview_{int(time.time() * 1000)}_{suffix}.png")
+    upload_dir = resolve_upload_dir()
+    suffix = "mobile" if request.mobile else "desktop"
+    out_path = os.path.join(upload_dir, f"preview_{int(time.time() * 1000)}_{suffix}.png")
 
     width = 390 if request.mobile else request.width
     height = 844 if request.mobile else request.height

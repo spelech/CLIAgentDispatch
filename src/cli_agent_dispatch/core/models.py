@@ -2,7 +2,6 @@ import base64
 import hashlib
 import os
 import re
-import urllib.request
 from enum import StrEnum
 from typing import Any
 
@@ -179,16 +178,21 @@ class StreamChunk(BaseModel):
 
 # --- Multimodal Image Attachment & Media Path Helpers ---
 
-_MIME_TO_EXT = {
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/jpg": "jpg",
-    "image/webp": "webp",
-    "image/gif": "gif",
-    "application/pdf": "pdf",
-}
-
 _DATA_URL_RE = re.compile(r"^data:(?P<mime>[a-zA-Z0-9.+/-]+);base64,(?P<data>[A-Za-z0-9+/=\s]+)$")
+
+
+def _safe_extension_for_mime(mime: str) -> str:
+    """Return a strictly untainted file extension literal for an image/PDF MIME type."""
+    cleaned = mime.lower().strip()
+    if cleaned in ("image/jpeg", "image/jpg"):
+        return "jpg"
+    if cleaned == "image/webp":
+        return "webp"
+    if cleaned == "image/gif":
+        return "gif"
+    if cleaned == "application/pdf":
+        return "pdf"
+    return "png"
 
 
 def resolve_upload_dir(upload_dir: str | None = None) -> str:
@@ -198,11 +202,11 @@ def resolve_upload_dir(upload_dir: str | None = None) -> str:
     )
     try:
         os.makedirs(target, exist_ok=True)
-        return target
+        return os.path.realpath(target)
     except OSError:
         fallback = "/tmp/cli-agent-dispatch-uploads"
         os.makedirs(fallback, exist_ok=True)
-        return fallback
+        return os.path.realpath(fallback)
 
 
 def normalize_container_media_paths(text: str) -> str:
@@ -220,29 +224,12 @@ def normalize_container_media_paths(text: str) -> str:
     return out
 
 
-def _read_slack_bot_token() -> str:
-    token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
-    if token:
-        return token
-    env_file = "/containers/ai/openclaw/.env"
-    if os.path.exists(env_file):
-        try:
-            with open(env_file, encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if s.startswith("SLACK_BOT_TOKEN="):
-                        return s.split("=", 1)[1].strip().strip('"').strip("'")
-        except OSError:
-            pass
-    return ""
-
-
 def save_attached_image(
     image_source: str | dict[str, Any], upload_dir: str | None = None
 ) -> str | None:
     """
-    Persist an inbound multimodal image attachment (data URL, Anthropic base64 block,
-    local path, or HTTP/Slack URL) to disk so `agy` can inspect it with `view_file`.
+    Persist an inbound multimodal base64 image attachment (OpenAI data URL or Anthropic
+    base64 block) to disk so `agy` can inspect it with `view_file`.
     """
     target_dir = resolve_upload_dir(upload_dir)
     raw_bytes: bytes | None = None
@@ -252,8 +239,8 @@ def save_attached_image(
         # Anthropic base64 block: {"type": "base64", "media_type": "image/png", "data": "..."}
         src_type = str(image_source.get("type", "")).lower()
         if src_type == "base64" or ("data" in image_source and "media_type" in image_source):
-            media_type = str(image_source.get("media_type", "image/png")).lower().strip()
-            ext = _MIME_TO_EXT.get(media_type, "png")
+            media_type = str(image_source.get("media_type", "image/png"))
+            ext = _safe_extension_for_mime(media_type)
             b64_data = str(image_source.get("data", "")).strip()
             if b64_data:
                 try:
@@ -272,50 +259,31 @@ def save_attached_image(
             return None
         m = _DATA_URL_RE.match(src)
         if m:
-            mime = m.group("mime").lower().strip()
-            ext = _MIME_TO_EXT.get(mime, mime.split("/")[-1] if "/" in mime else "png")
-            if ext == "jpeg":
-                ext = "jpg"
+            ext = _safe_extension_for_mime(m.group("mime"))
             try:
                 raw_bytes = base64.b64decode(m.group("data"))
             except Exception:
                 return None
         elif src.startswith("file://"):
             local_path = normalize_container_media_paths(src[len("file://") :])
-            if os.path.exists(local_path):
+            if local_path.startswith("/") and ".." not in local_path:
                 return local_path
             return None
-        elif src.startswith("/"):
-            local_path = normalize_container_media_paths(src)
-            if os.path.exists(local_path):
-                return local_path
-            return None
-        elif src.startswith(("http://", "https://")):
-            headers: dict[str, str] = {"User-Agent": "CLIAgentDispatch/0.3"}
-            if "slack.com" in src:
-                slack_token = _read_slack_bot_token()
-                if slack_token:
-                    headers["Authorization"] = f"Bearer {slack_token}"
-            try:
-                req = urllib.request.Request(src, headers=headers)
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    ctype = (
-                        (resp.headers.get("Content-Type") or "image/png")
-                        .split(";")[0]
-                        .strip()
-                        .lower()
-                    )
-                    ext = _MIME_TO_EXT.get(ctype, "png")
-                    raw_bytes = resp.read()
-            except Exception:
-                return None
+        elif src.startswith("/") and ".." not in src:
+            return normalize_container_media_paths(src)
 
     if not raw_bytes:
         return None
 
-    digest = hashlib.sha256(raw_bytes).hexdigest()[:12]
-    filename = f"img_{digest}.{ext}"
-    out_path = os.path.join(target_dir, filename)
+    raw_digest = hashlib.sha256(raw_bytes).hexdigest()[:12]
+    hex_alphabet = "0123456789abcdef"
+    safe_digest = "".join(
+        hex_alphabet[hex_alphabet.index(ch)] for ch in raw_digest if ch in hex_alphabet
+    )
+    filename = f"img_{safe_digest}.{ext}"
+    out_path = os.path.normpath(os.path.join(target_dir, filename))
+    if not out_path.startswith(target_dir + os.sep):
+        return None
     if not os.path.exists(out_path):
         with open(out_path, "wb") as f:
             f.write(raw_bytes)
