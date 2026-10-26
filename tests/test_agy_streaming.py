@@ -270,3 +270,48 @@ async def test_agy_execute_stream_emits_reasoning_delta_for_tools(tmp_path):
     assert "done" in reasoning_chunks[1]
     text_deltas = "".join(c.delta for c in chunks)
     assert "Version is 0.1.4" in text_deltas
+
+
+def test_resolve_agy_effort_and_env():
+    from cli_agent_dispatch.executors.agy import _build_agy_subprocess_env, resolve_agy_effort
+
+    assert resolve_agy_effort("agy-argon", None) is None
+    assert resolve_agy_effort("agy-argon-xhigh", None) == "xhigh"
+    assert resolve_agy_effort("agy-argon-max", None) == "max"
+    assert resolve_agy_effort("gemini-4-argon", "high") == "high"
+    assert resolve_agy_effort("gemini-4-argon", "extra_high") == "xhigh"
+    assert resolve_agy_effort("gemini-4-argon", "minimal") == "low"
+    assert normalize_agy_model("agy-argon-xhigh") == "Gemini 4 Argon (High)"
+    assert normalize_agy_model("agy-argon-max") == "Gemini 4 Argon (High)"
+
+    env = _build_agy_subprocess_env("/containers")
+    assert env["AGY_CLI_OSC7501"] == "off"
+    assert env["NO_COLOR"] == "1"
+    assert env["PWD"] == "/containers"
+
+
+@pytest.mark.asyncio
+async def test_agy_execute_passes_effort_and_osc7501_env(tmp_path):
+    fake_agy = tmp_path / "agy"
+    script = (
+        "#!/bin/sh\n"
+        'printf \'{"response":"args=%s osc=%s color=%s","conversation_id":"conv-effort-1"}\\n\' "$*" "$AGY_CLI_OSC7501" "$NO_COLOR"\n'
+    )
+    fake_agy.write_text(script)
+    fake_agy.chmod(0o755)
+
+    executor = AgyExecutor()
+    req = TaskRequest(
+        prompt="Run with xhigh",
+        executor=ExecutorType.AGY,
+        model="agy-argon-xhigh",
+        workspace=str(tmp_path),
+    )
+
+    with patch("cli_agent_dispatch.executors.agy.settings.agy_path", str(fake_agy)):
+        res = await executor.execute(req)
+
+    assert res.success is True
+    assert "--effort xhigh" in res.output
+    assert "osc=off" in res.output
+    assert "color=1" in res.output

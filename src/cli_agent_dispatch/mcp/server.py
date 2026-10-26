@@ -31,6 +31,7 @@ async def delegate_task_tool(
     executor: str = "agy",
     workspace: str | None = None,
     model: str | None = None,
+    effort: str | None = None,
     timeout: int | None = None,
     session_id: str | None = None,
 ) -> str:
@@ -40,7 +41,8 @@ async def delegate_task_tool(
         prompt: Task instructions, prompt, or problem description for the agent.
         executor: Target engine: 'agy' (default, Antigravity CLI) or 'opencode' (OpenCode v2).
         workspace: Absolute path to target repository/directory (defaults to /containers).
-        model: Model override (e.g. 'gemini-3.8-flash', 'claude-sonnet-5.5', 'gpt-oss-120b', or 'opencode-default').
+        model: Model override (e.g. 'gemini-4-argon', 'gemini-3.8-flash', 'claude-sonnet-5.5', 'gpt-oss-120b', or 'opencode-default').
+        effort: Optional reasoning effort ('low', 'medium', 'high', 'xhigh', 'max').
         timeout: Execution timeout in seconds (default: 180).
         session_id: Optional session identifier for continuous multi-turn thread persistence.
 
@@ -53,6 +55,7 @@ async def delegate_task_tool(
         executor=exec_type,
         workspace=workspace,
         model=model,
+        effort=effort,
         timeout=timeout,
         session_id=session_id,
     )

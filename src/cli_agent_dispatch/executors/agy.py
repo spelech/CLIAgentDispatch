@@ -162,21 +162,21 @@ def normalize_agy_model(model: str | None) -> str:
             return display_name
 
     if "argon" in m:
-        if "high" in m:
+        if "high" in m or "max" in m:
             return "Gemini 4 Argon (High)"
         if "low" in m:
             return "Gemini 4 Argon (Low)"
         return "Gemini 4 Argon (Medium)"
 
     if "opus" in m:
-        if m == "agy-opus" or "high" in m:
+        if m == "agy-opus" or "high" in m or "max" in m:
             return "Claude Opus 5.5 (High)"
         if "low" in m:
             return "Claude Opus 5.5 (Low)"
         return "Claude Opus 5.5 (Medium)"
 
     if "sonnet" in m or "claude" in m:
-        if m == "agy-sonnet" or "high" in m:
+        if m == "agy-sonnet" or "high" in m or "max" in m:
             return "Claude Sonnet 5.5 (High)"
         if "low" in m:
             return "Claude Sonnet 5.5 (Low)"
@@ -188,11 +188,61 @@ def normalize_agy_model(model: str | None) -> str:
     if "gemini" in m or "flash" in m:
         if "low" in m:
             return "Gemini 3.8 Flash (Low)"
-        if "high" in m:
+        if "high" in m or "max" in m:
             return "Gemini 3.8 Flash (High)"
         return "Gemini 3.8 Flash (Medium)"
 
     return raw
+
+
+VALID_AGY_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+_EFFORT_SYNONYMS = {
+    "minimal": "low",
+    "min": "low",
+    "med": "medium",
+    "extra_high": "xhigh",
+    "extra-high": "xhigh",
+    "x-high": "xhigh",
+    "maximum": "max",
+}
+
+
+def resolve_agy_effort(
+    model: str | None = None,
+    explicit_effort: str | None = None,
+) -> str | None:
+    """
+    Resolve an explicit reasoning effort or infer `xhigh`/`max` from model suffix.
+    Returns one of ('low', 'medium', 'high', 'xhigh', 'max') or None.
+    """
+    if explicit_effort:
+        cleaned = explicit_effort.strip().lower()
+        cleaned = _EFFORT_SYNONYMS.get(cleaned, cleaned)
+        if cleaned in VALID_AGY_EFFORTS:
+            return cleaned
+
+    if model:
+        m = model.strip().lower()
+        if m.endswith(("-xhigh", "_xhigh", "(xhigh)")) or "xhigh" in m:
+            return "xhigh"
+        if m.endswith(("-max", "_max", "(max)")):
+            return "max"
+
+    return None
+
+
+def _build_agy_subprocess_env(workspace: str | None = None) -> dict[str, str]:
+    """
+    Build subprocess environment for headless agy CLI execution:
+      - AGY_CLI_OSC7501=off: disable terminal status escape sequence probing
+      - NO_COLOR=1: suppress ANSI color codes on non-TTY pipes
+    """
+    env = os.environ.copy()
+    env["AGY_CLI_OSC7501"] = "off"
+    env["NO_COLOR"] = "1"
+    if workspace:
+        env["PWD"] = workspace
+    return env
 
 
 def is_openclaw_prompt(prompt: str) -> bool:
@@ -643,12 +693,15 @@ class AgyExecutor(BaseExecutor):
             perm_flags = ["--dangerously-skip-permissions"]
 
         use_stdin = len(prompt.encode("utf-8")) > 100_000
+        effort = resolve_agy_effort(request.model, request.effort)
         cmd = [
             agy_path,
             "--model",
             model,
             *perm_flags,
         ]
+        if effort:
+            cmd.extend(["--effort", effort])
         if request.session_id:
             cmd.extend(["--conversation", request.session_id])
         if use_stdin:
@@ -669,9 +722,7 @@ class AgyExecutor(BaseExecutor):
             cmd.extend(["--output-format", "json", "--print", prompt])
             stdin_bytes = None
 
-        env = os.environ.copy()
-        if workspace:
-            env["PWD"] = workspace
+        env = _build_agy_subprocess_env(workspace)
 
         run_id = request.session_id or f"run_{uuid.uuid4().hex[:10]}"
         process = None
@@ -810,12 +861,15 @@ class AgyExecutor(BaseExecutor):
             perm_flags = ["--dangerously-skip-permissions"]
 
         use_stdin = len(prompt.encode("utf-8")) > 100_000
+        effort = resolve_agy_effort(request.model, request.effort)
         cmd = [
             agy_path,
             "--model",
             model,
             *perm_flags,
         ]
+        if effort:
+            cmd.extend(["--effort", effort])
         if request.session_id:
             cmd.extend(["--conversation", request.session_id])
         if use_stdin:
@@ -842,6 +896,7 @@ class AgyExecutor(BaseExecutor):
             enabled=is_interactive_slack_turn(prompt),
         )
 
+        env = _build_agy_subprocess_env(workspace)
         process = None
         session_id = request.session_id
         stream_status = "done"
@@ -849,6 +904,7 @@ class AgyExecutor(BaseExecutor):
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=workspace,
+                env=env,
                 stdin=asyncio.subprocess.PIPE if use_stdin else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

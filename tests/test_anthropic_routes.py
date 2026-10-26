@@ -134,3 +134,44 @@ async def test_anthropic_messages_empty_validation(async_client):
         "/v1/messages", json={"model": "claude-sonnet-5.5", "messages": []}
     )
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_with_reasoning_and_effort(async_client):
+    captured_reqs: list[TaskRequest] = []
+
+    async def mock_stream_gen(task_req: TaskRequest):
+        captured_reqs.append(task_req)
+        yield StreamChunk(
+            delta="",
+            reasoning_delta="🛠️ *run_command*: `pytest`\n",
+            session_id="conv-anth-think",
+        )
+        yield StreamChunk(
+            delta="All tests passed.",
+            is_final=True,
+            session_id="conv-anth-think",
+            finish_reason="stop",
+        )
+
+    with patch(
+        "cli_agent_dispatch.api.anthropic_routes.engine.dispatch_stream",
+        side_effect=mock_stream_gen,
+    ):
+        payload = {
+            "model": "claude-opus-5.5",
+            "thinking": {"type": "enabled", "budget_tokens": 32000},
+            "messages": [{"role": "user", "content": "Run tests"}],
+            "stream": True,
+        }
+
+        resp = await async_client.post("/v1/messages", json=payload)
+        assert resp.status_code == 200
+        text = resp.text
+        assert '"type": "thinking"' in text
+        assert '"type": "thinking_delta"' in text
+        assert "run_command" in text
+        assert '"type": "text_delta"' in text
+        assert "All tests passed." in text
+        assert len(captured_reqs) == 1
+        assert captured_reqs[0].effort == "max"
