@@ -35,6 +35,10 @@ class TaskRequest(BaseModel):
         default=None,
         description="Override model ID (e.g. 'opencode-default', 'gemini-3.8-flash', 'claude-sonnet-5.5').",
     )
+    effort: str | None = Field(
+        default=None,
+        description="Reasoning effort level ('low', 'medium', 'high', 'xhigh', 'max').",
+    )
     provider: str | None = Field(
         default=None,
         description="Provider ID (primarily for OpenCode, e.g. 'litellm').",
@@ -75,6 +79,10 @@ class InvestigationRequest(BaseModel):
     )
     max_turns: int = Field(default=5, description="Maximum number of diagnostic turns allowed.")
     model: str | None = Field(default=None, description="Override model ID.")
+    effort: str | None = Field(
+        default=None,
+        description="Reasoning effort level ('low', 'medium', 'high', 'xhigh', 'max').",
+    )
     provider: str | None = Field(default=None, description="Provider ID.")
     timeout: int | None = Field(default=None, description="Timeout in seconds per turn.")
     session_id: str | None = Field(
@@ -126,6 +134,10 @@ class SessionCreateRequest(BaseModel):
         default=None, description="Working directory for code and file operations."
     )
     model: str | None = Field(default=None, description="Override model ID.")
+    effort: str | None = Field(
+        default=None,
+        description="Reasoning effort level ('low', 'medium', 'high', 'xhigh', 'max').",
+    )
     provider: str | None = Field(default=None, description="Provider ID.")
     timeout: int | None = Field(default=None, description="Timeout in seconds.")
 
@@ -148,6 +160,10 @@ class SessionMessageRequest(BaseModel):
         default=None, description="Working directory for code and file operations."
     )
     model: str | None = Field(default=None, description="Override model ID.")
+    effort: str | None = Field(
+        default=None,
+        description="Reasoning effort level ('low', 'medium', 'high', 'xhigh', 'max').",
+    )
     provider: str | None = Field(default=None, description="Provider ID.")
     timeout: int | None = Field(default=None, description="Timeout in seconds.")
 
@@ -340,6 +356,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = None
     stream: bool = False
     max_tokens: int | None = None
+    reasoning_effort: str | None = None
+    effort: str | None = None
     session_id: str | None = None
     user: str | None = None
 
@@ -391,12 +409,17 @@ class AnthropicMessage(BaseModel):
 
 
 class AnthropicMessagesRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str
     messages: list[AnthropicMessage]
     system: str | list[AnthropicTextBlock] | list[dict[str, Any]] | None = None
     max_tokens: int = Field(default=4096)
     temperature: float | None = None
     stream: bool = False
+    thinking: dict[str, Any] | None = None
+    effort: str | None = None
+    reasoning_effort: str | None = None
     metadata: dict[str, Any] | None = None
     session_id: str | None = None
 

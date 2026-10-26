@@ -31,9 +31,13 @@ STATIC_MODEL_ALIASES = [
     "agy",
     "agy-argon",
     "agy-argon-high",
+    "agy-argon-xhigh",
+    "agy-argon-max",
     "agy-argon-low",
     "agy-opus",
     "agy-opus-medium",
+    "agy-opus-xhigh",
+    "agy-opus-max",
     "agy-sonnet",
     "agy-sonnet-medium",
     "agy-flash",
@@ -234,6 +238,7 @@ async def create_chat_completion(
         session_id=native_session_id,
         executor=exec_type,
         model=model_override,
+        effort=request.effort or request.reasoning_effort,
     )
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"

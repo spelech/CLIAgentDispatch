@@ -83,6 +83,35 @@ def _extract_anthropic_delta_turn(messages: list[AnthropicMessage]) -> str:
     return _extract_text_content(messages[-1].content) if messages else ""
 
 
+def _extract_anthropic_effort(request: AnthropicMessagesRequest) -> str | None:
+    """Resolve reasoning effort from Anthropic request fields, metadata, or thinking budget."""
+    if request.effort:
+        return request.effort
+    if request.reasoning_effort:
+        return request.reasoning_effort
+    if request.metadata and isinstance(request.metadata, dict):
+        meta_effort = request.metadata.get("effort") or request.metadata.get("reasoning_effort")
+        if isinstance(meta_effort, str) and meta_effort.strip():
+            return meta_effort.strip()
+    if request.thinking and isinstance(request.thinking, dict):
+        t_effort = request.thinking.get("effort")
+        if isinstance(t_effort, str) and t_effort.strip():
+            return t_effort.strip()
+        if str(request.thinking.get("type", "")).lower() == "enabled":
+            budget = request.thinking.get("budget_tokens")
+            if isinstance(budget, (int, float)):
+                if budget >= 32000:
+                    return "max"
+                if budget >= 24000:
+                    return "xhigh"
+                if budget >= 16000:
+                    return "high"
+                if budget <= 4000:
+                    return "low"
+                return "medium"
+    return None
+
+
 async def _stream_anthropic_sse(
     message_id: str,
     model: str,
@@ -107,16 +136,11 @@ async def _stream_anthropic_sse(
     }
     yield f"event: message_start\ndata: {json.dumps(start_event)}\n\n"
 
-    # 2. content_block_start
-    block_start_event = {
-        "type": "content_block_start",
-        "index": 0,
-        "content_block": {"type": "text", "text": ""},
-    }
-    yield f"event: content_block_start\ndata: {json.dumps(block_start_event)}\n\n"
-
     total_output_tokens = 0
-    # 3. Stream deltas
+    block_index = -1
+    current_block_type: str | None = None
+
+    # 2. Stream deltas (dynamically switching between thinking and text content blocks)
     async for chunk in stream_gen:
         if chunk.session_id and client_session_id:
             await session_store.get_or_create(
@@ -125,23 +149,68 @@ async def _stream_anthropic_sse(
                 native_session_id=chunk.session_id,
             )
 
+        if chunk.reasoning_delta:
+            if current_block_type != "thinking":
+                if current_block_type is not None:
+                    stop_evt = {"type": "content_block_stop", "index": block_index}
+                    yield f"event: content_block_stop\ndata: {json.dumps(stop_evt)}\n\n"
+                block_index += 1
+                current_block_type = "thinking"
+                start_evt = {
+                    "type": "content_block_start",
+                    "index": block_index,
+                    "content_block": {"type": "thinking", "thinking": ""},
+                }
+                yield f"event: content_block_start\ndata: {json.dumps(start_evt)}\n\n"
+
+            total_output_tokens += max(1, len(chunk.reasoning_delta) // 4)
+            thinking_evt = {
+                "type": "content_block_delta",
+                "index": block_index,
+                "delta": {"type": "thinking_delta", "thinking": chunk.reasoning_delta},
+            }
+            yield f"event: content_block_delta\ndata: {json.dumps(thinking_evt)}\n\n"
+
         if chunk.delta:
+            if current_block_type != "text":
+                if current_block_type is not None:
+                    stop_evt = {"type": "content_block_stop", "index": block_index}
+                    yield f"event: content_block_stop\ndata: {json.dumps(stop_evt)}\n\n"
+                block_index += 1
+                current_block_type = "text"
+                start_evt = {
+                    "type": "content_block_start",
+                    "index": block_index,
+                    "content_block": {"type": "text", "text": ""},
+                }
+                yield f"event: content_block_start\ndata: {json.dumps(start_evt)}\n\n"
+
             total_output_tokens += max(1, len(chunk.delta) // 4)
             delta_event = {
                 "type": "content_block_delta",
-                "index": 0,
+                "index": block_index,
                 "delta": {"type": "text_delta", "text": chunk.delta},
             }
             yield f"event: content_block_delta\ndata: {json.dumps(delta_event)}\n\n"
 
-    # 4. content_block_stop
+    # Ensure at least one text block is emitted if the stream produced no blocks
+    if current_block_type is None:
+        block_index = 0
+        block_start_event = {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }
+        yield f"event: content_block_start\ndata: {json.dumps(block_start_event)}\n\n"
+
+    # Close the final active content block
     block_stop_event = {
         "type": "content_block_stop",
-        "index": 0,
+        "index": block_index,
     }
     yield f"event: content_block_stop\ndata: {json.dumps(block_stop_event)}\n\n"
 
-    # 5. message_delta
+    # message_delta
     msg_delta_event = {
         "type": "message_delta",
         "delta": {"stop_reason": "end_turn", "stop_sequence": None},
@@ -149,7 +218,7 @@ async def _stream_anthropic_sse(
     }
     yield f"event: message_delta\ndata: {json.dumps(msg_delta_event)}\n\n"
 
-    # 6. message_stop
+    # message_stop
     yield 'event: message_stop\ndata: {"type": "message_stop"}\n\n'
 
 
@@ -197,6 +266,7 @@ async def create_anthropic_message(
         session_id=native_session_id,
         executor=exec_type,
         model=model_override,
+        effort=_extract_anthropic_effort(request),
     )
 
     message_id = f"msg_{uuid.uuid4().hex[:12]}"

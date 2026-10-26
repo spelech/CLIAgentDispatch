@@ -76,6 +76,7 @@ async def create_session(
         system_prompt=req.system_prompt,
         workspace=req.workspace,
         model=req.model,
+        effort=req.effort,
         provider=req.provider,
         timeout=req.timeout,
     )
@@ -164,6 +165,7 @@ async def send_session_message(
         executor=target_executor,
         workspace=request.workspace,
         model=request.model,
+        effort=request.effort,
         provider=request.provider,
         timeout=request.timeout,
     )
