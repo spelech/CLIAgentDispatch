@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import html as _html
 import json
 import logging
 import os
@@ -80,23 +81,37 @@ async def send_t3_pairing_ntfy(
     credential = str(pair_data["credential"])
     label = str(pair_data.get("label") or "Mobile / Remote Device")
     expires_at = str(pair_data.get("expires_at") or "15m")
+    ui_url = str(pair_data.get("ui_url") or settings.t3_ui_url).rstrip("/")
+    copy_url = f"{ui_url}/sso-pair/copy?" + urllib.parse.urlencode(
+        {"code": credential, "expires": expires_at}
+    )
 
+    # Note: Do NOT set "click" so tapping the notification body simply opens
+    # the notification inside the ntfy app without launching the T3 site.
     payload = {
         "topic": topic,
-        "title": f"T3 Code Pairing Link ({label})",
+        "title": f"T3 Code Pairing ({label})",
+        "markdown": True,
         "message": (
-            f"Tap below to pair T3 Code on {label}.\nCode: {credential}\nExpires: {expires_at}"
+            f"Pairing code for **{label}** (Server: `{ui_url}`):\n"
+            f"```\n{credential}\n```\n"
+            f"Expires: `{expires_at}`"
         ),
         "priority": 4,
         "tags": ["key", "thread"],
-        "click": pair_url,
         "actions": [
             {
                 "action": "view",
-                "label": "🧵 Pair T3 Code Now",
+                "label": "📋 Copy Code",
+                "url": copy_url,
+                "clear": False,
+            },
+            {
+                "action": "view",
+                "label": "🚀 Pair This Browser",
                 "url": pair_url,
                 "clear": True,
-            }
+            },
         ],
     }
 
@@ -118,9 +133,10 @@ async def send_t3_pairing_ntfy(
 
 
 def _render_pair_card_html(pair_data: dict[str, Any], ntfy_sent: bool, user_label: str) -> str:
-    pair_url = pair_data["pair_url"]
-    credential = pair_data["credential"]
-    expires_at = pair_data.get("expires_at") or ""
+    pair_url = _html.escape(str(pair_data["pair_url"]), quote=True)
+    credential = _html.escape(str(pair_data["credential"]), quote=True)
+    expires_at = _html.escape(str(pair_data.get("expires_at") or ""), quote=True)
+    safe_user = _html.escape(str(user_label), quote=True)
     ntfy_badge = (
         "📲 Sent to ntfy (wileyriley-sso)"
         if ntfy_sent
@@ -194,7 +210,7 @@ def _render_pair_card_html(pair_data: dict[str, Any], ntfy_sent: bool, user_labe
 <body>
   <div class="card">
     <h1>🧵 T3 Code Device Pairing</h1>
-    <p class="sub">Authenticated as <strong>{user_label}</strong></p>
+    <p class="sub">Authenticated as <strong>{safe_user}</strong></p>
     <div class="code" id="pair-code">{credential}</div>
     <button class="btn" type="button" onclick="copyText('{credential}', this, '📋 Copy Pairing Code')">📋 Copy Pairing Code</button>
     <button class="btn secondary" type="button" onclick="copyText('{pair_url}', this, '🔗 Copy Pairing Link')">🔗 Copy Pairing Link</button>
@@ -279,3 +295,112 @@ async def sso_pair_t3(
         return HTMLResponse(_render_pair_card_html(pair_data, ntfy_sent, remote_user))
 
     return RedirectResponse(url=pair_data["pair_url"], status_code=302)
+
+
+@router.get("/sso-pair/copy", response_class=HTMLResponse)
+@router.get("/v1/t3/pair/copy", response_class=HTMLResponse)
+async def sso_pair_copy_only() -> HTMLResponse:
+    """
+    Lightweight clipboard-copy helper opened by the ntfy 'Copy Code' action button.
+    Does NOT open the T3 Code web app or consume the single-use pairing token.
+    """
+    ui_url = settings.t3_ui_url.rstrip("/")
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Copy T3 Pairing Code</title>
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #090d16;
+      color: #f3f4f6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 1.25rem;
+      box-sizing: border-box;
+    }}
+    .card {{
+      max-width: 420px;
+      width: 100%;
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 16px;
+      padding: 2rem;
+      text-align: center;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+    }}
+    h1 {{ font-size: 1.25rem; margin: 0 0 0.5rem; }}
+    p.sub {{ color: #9ca3af; font-size: 0.9rem; margin: 0 0 1.25rem; }}
+    .code {{
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 1.65rem;
+      letter-spacing: 0.14em;
+      background: #0b0f19;
+      border: 1px solid #374151;
+      border-radius: 10px;
+      padding: 0.9rem;
+      margin-bottom: 1.25rem;
+      color: #60a5fa;
+      user-select: all;
+    }}
+    button.btn {{
+      display: block;
+      width: 100%;
+      border: none;
+      cursor: pointer;
+      font-size: 1rem;
+      background: #2563eb;
+      color: #ffffff;
+      font-weight: 600;
+      padding: 0.95rem 1.25rem;
+      border-radius: 10px;
+      margin-bottom: 0.75rem;
+    }}
+    .meta {{ color: #6b7280; font-size: 0.8rem; margin-top: 1rem; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📋 T3 Mobile App Pairing Code</h1>
+    <p class="sub" id="status-msg">Tap below to copy for the T3 mobile app (token is NOT consumed here)</p>
+    <div class="code" id="code-box">---</div>
+    <button class="btn" id="copy-btn" type="button" onclick="copyCode()">📋 Copy Pairing Code</button>
+    <div class="meta">Server URL: <code>{ui_url}</code><br/><span id="exp-box"></span></div>
+  </div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const CODE = (params.get("code") || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32);
+    const EXP = (params.get("expires") || "").slice(0, 40);
+    document.getElementById("code-box").textContent = CODE || "No code";
+    if (EXP) {{
+      document.getElementById("exp-box").textContent = "Expires: " + EXP;
+    }}
+    async function copyCode() {{
+      if (!CODE) return;
+      const btn = document.getElementById("copy-btn");
+      const status = document.getElementById("status-msg");
+      try {{
+        await navigator.clipboard.writeText(CODE);
+        btn.textContent = "✅ Copied to Clipboard!";
+        status.textContent = "Paste this code into your T3 mobile/tablet app.";
+      }} catch (e) {{
+        const el = document.createElement("textarea");
+        el.value = CODE;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand("copy");
+        document.body.removeChild(el);
+        btn.textContent = "✅ Copied to Clipboard!";
+        status.textContent = "Paste this code into your T3 mobile/tablet app.";
+      }}
+    }}
+    window.addEventListener("DOMContentLoaded", () => {{ copyCode(); }});
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(html)
