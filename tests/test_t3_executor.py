@@ -1,6 +1,8 @@
 import json
+import os
+import shutil
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,11 +14,14 @@ from cli_agent_dispatch.api.openai_routes import (
     _resolve_executor_and_model as resolve_openai_model,
 )
 from cli_agent_dispatch.api.session_routes import _resolve_session_executor
+from cli_agent_dispatch.config import settings
 from cli_agent_dispatch.core.models import ExecutorType, TaskRequest
 from cli_agent_dispatch.core.session_store import session_store
 from cli_agent_dispatch.executors.agy import SlackActivityTracker
 from cli_agent_dispatch.executors.t3 import (
     T3Executor,
+    T3McpClient,
+    T3McpError,
     _title_from_prompt,
     discover_t3_models,
     format_t3_activity_item,
@@ -329,16 +334,214 @@ async def test_mcp_server_tools_include_t3() -> None:
     assert "t3-agy-flash" in model_ids
     assert "t3-opencode-sonnet" in model_ids
 
-    health_json = json.loads(await check_executor_health_tool())
+    with (
+        patch("cli_agent_dispatch.mcp.server.os.path.exists", return_value=True),
+        patch("cli_agent_dispatch.mcp.server.os.access", return_value=True),
+    ):
+        health_json = json.loads(await check_executor_health_tool())
     assert "t3" in health_json["executors"]
     assert health_json["executors"]["t3"]["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_t3_mcp_client_protocol_and_oauth_flow(tmp_path: Any) -> None:
+    """Unit test T3McpClient OAuth token minting, disk caching, JSON-RPC / SSE parsing, and project resolution."""
+    tok_file = str(tmp_path / "t3_token.json")
+    fake_cli = str(tmp_path / "t3")
+    with open(fake_cli, "w", encoding="utf-8") as f:
+        f.write("#!/bin/sh\n")
+
+    T3McpClient._cached_token = None
+    T3McpClient._cached_expires_at = 0.0
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(
+        return_value=(json.dumps({"credential": "PAIR123"}).encode("utf-8"), b"")
+    )
+
+    def _make_resp(
+        json_data: dict[str, Any] | None = None,
+        text_data: str = "",
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> MagicMock:
+        r = MagicMock()
+        r.status_code = status_code
+        r.headers = headers or {"content-type": "application/json"}
+        r.text = text_data or (json.dumps(json_data) if json_data is not None else "")
+        r.json = MagicMock(return_value=json_data or {})
+        r.raise_for_status = MagicMock()
+        return r
+
+    oauth_client = AsyncMock()
+    oauth_client.__aenter__.return_value = oauth_client
+    oauth_client.post = AsyncMock(
+        side_effect=[
+            _make_resp({"client_id": "cid-1"}),
+            _make_resp({"redirectTo": "http://127.0.0.1:8032/callback?code=authcode-1"}),
+            _make_resp({"access_token": "tok-minted-1", "expires_in": 2592000}),
+        ]
+    )
+
+    mcp_http = AsyncMock()
+    mcp_http.post = AsyncMock(
+        side_effect=[
+            # initialize
+            _make_resp(
+                {"jsonrpc": "2.0", "id": "init-0", "result": {}},
+                headers={"mcp-session-id": "sess-xyz", "content-type": "application/json"},
+            ),
+            # notifications/initialized
+            _make_resp({}),
+            # t3_project_list (empty -> triggers t3_project_create)
+            _make_resp(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "cad-1",
+                    "result": {"structuredContent": {"projects": [], "nextCursor": None}},
+                }
+            ),
+            # t3_project_create via SSE envelope
+            _make_resp(
+                text_data='event: message\ndata: {"jsonrpc":"2.0","id":"cad-2","result":{"structuredContent":{"id":"proj-created-1"}}}\n\n',
+                headers={"content-type": "text/event-stream"},
+            ),
+            # launch_thread
+            _make_resp(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "cad-3",
+                    "result": {"structuredContent": {"threadId": "mcp:new-1"}},
+                }
+            ),
+            # configure_thread
+            _make_resp(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "cad-4",
+                    "result": {"structuredContent": {"ok": True}},
+                }
+            ),
+            # send_message
+            _make_resp(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "cad-5",
+                    "result": {"structuredContent": {"ok": True}},
+                }
+            ),
+            # wait_run
+            _make_resp(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "cad-6",
+                    "result": {"structuredContent": {"status": "completed", "timedOut": False}},
+                }
+            ),
+            # read_thread (page 1 for read_run_result_text, with truncated text)
+            _make_resp(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "cad-7",
+                    "result": {
+                        "structuredContent": {
+                            "items": [
+                                {
+                                    "itemId": "it-1",
+                                    "runId": "run-1",
+                                    "type": "assistant_message",
+                                    "text": "HELLO_",
+                                    "textTruncated": True,
+                                    "nextTextOffset": 6,
+                                }
+                            ],
+                            "hasMore": False,
+                            "nextPosition": None,
+                        }
+                    },
+                }
+            ),
+            # read_thread (continuation chunk for read_full_item_text)
+            _make_resp(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "cad-8",
+                    "result": {
+                        "structuredContent": {
+                            "items": [
+                                {
+                                    "itemId": "it-1",
+                                    "runId": "run-1",
+                                    "type": "assistant_message",
+                                    "text": "WORLD",
+                                    "textTruncated": False,
+                                    "nextTextOffset": None,
+                                }
+                            ]
+                        }
+                    },
+                }
+            ),
+            # interrupt_thread
+            _make_resp(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "cad-9",
+                    "result": {"structuredContent": {"ok": True}},
+                }
+            ),
+        ]
+    )
+    mcp_http.delete = AsyncMock(return_value=_make_resp({}))
+    mcp_http.aclose = AsyncMock()
+
+    with (
+        patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+        patch("httpx.AsyncClient", side_effect=[mcp_http, oauth_client]),
+    ):
+        client = T3McpClient(
+            server_url="http://127.0.0.1:3773",
+            cli_path=fake_cli,
+            token_cache_path=tok_file,
+        )
+        async with client as c:
+            proj_id = await c.resolve_or_create_project(str(tmp_path))
+            assert proj_id == "proj-created-1"
+            launched = await c.launch_thread(
+                proj_id, "Title", "Hi", "antigravity", "gemini-3.8-flash-high"
+            )
+            assert launched["threadId"] == "mcp:new-1"
+            await c.configure_thread("mcp:new-1", "opencode", "google-agy/claude-sonnet-5-5")
+            await c.send_message("mcp:new-1", "Followup")
+            await c.wait_run("mcp:new-1", "run-1", timeout_ms=5000)
+            full_text = await c.read_run_result_text("mcp:new-1", "run-1", "assistant_message")
+            assert full_text == "HELLO_WORLD"
+            await c.interrupt_thread("mcp:new-1", run_id="run-1")
+
+    # Verify disk cache reload path
+    T3McpClient._cached_token = None
+    T3McpClient._cached_expires_at = 0.0
+    client2 = T3McpClient(
+        server_url="http://127.0.0.1:3773",
+        cli_path=fake_cli,
+        token_cache_path=tok_file,
+    )
+    loaded_tok = await client2.get_token()
+    assert loaded_tok == "tok-minted-1"
+    assert T3McpError("boom").args[0] == "boom"
 
 
 # ---------------------------------------------------------------------------
 # 3. Live End-to-End (E2E) Tests against Running T3 Daemon (127.0.0.1:3773)
 # ---------------------------------------------------------------------------
 
+_LIVE_T3_AVAILABLE = bool(
+    os.path.exists(settings.t3_cli_path) or shutil.which(settings.t3_cli_path)
+)
 
+
+@pytest.mark.skipif(not _LIVE_T3_AVAILABLE, reason="Live T3 Code daemon not installed on CI runner")
 @pytest.mark.asyncio
 async def test_live_e2e_t3_multi_turn_and_model_switch() -> None:
     """
@@ -379,6 +582,7 @@ async def test_live_e2e_t3_multi_turn_and_model_switch() -> None:
     assert "PINEAPPLE_42" in turn2.output
 
 
+@pytest.mark.skipif(not _LIVE_T3_AVAILABLE, reason="Live T3 Code daemon not installed on CI runner")
 def test_live_e2e_openai_route_with_t3() -> None:
     """End-to-end test of `/v1/chat/completions` with `model='t3-opencode-flash'`."""
     client = TestClient(app)
