@@ -48,12 +48,19 @@ def _extract_text_content(content: str | list[Any]) -> str:
 
 
 def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | None]:
-    name_lower = model_name.lower()
+    raw = model_name.strip()
+    for prefix in ("openai/", "litellm/", "anthropic/"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :].strip()
+            break
+    name_lower = raw.lower()
+    if name_lower == "t3" or name_lower.startswith(("t3-", "t3/", "t3_")):
+        return ExecutorType.T3, raw
     if any(
         k in name_lower for k in ["claude", "agy", "argon", "gemini", "opus", "sonnet", "gpt-oss"]
     ):
         exec_type = ExecutorType.AGY
-        model_override = model_name
+        model_override = raw
     else:
         exec_type = ExecutorType.OPENCODE
         if "small" in name_lower:
@@ -61,7 +68,7 @@ def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | No
         elif "default" in name_lower or "opencode" in name_lower:
             model_override = "opencode-default"
         else:
-            model_override = model_name
+            model_override = raw
     return exec_type, model_override
 
 

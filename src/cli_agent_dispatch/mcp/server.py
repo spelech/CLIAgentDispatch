@@ -49,7 +49,13 @@ async def delegate_task_tool(
     Returns:
         The raw agent execution output, diffs, or error diagnostics.
     """
-    exec_type = ExecutorType.OPENCODE if executor.lower() == "opencode" else ExecutorType.AGY
+    exec_lower = executor.lower()
+    if exec_lower == "t3":
+        exec_type = ExecutorType.T3
+    elif exec_lower == "opencode":
+        exec_type = ExecutorType.OPENCODE
+    else:
+        exec_type = ExecutorType.AGY
     req = TaskRequest(
         prompt=prompt,
         executor=exec_type,
@@ -93,7 +99,13 @@ async def investigate_incident_tool(
     Returns:
         Structured JSON resolution including root cause, proposed fix, and turns used.
     """
-    exec_type = ExecutorType.OPENCODE if executor.lower() == "opencode" else ExecutorType.AGY
+    exec_lower = executor.lower()
+    if exec_lower == "t3":
+        exec_type = ExecutorType.T3
+    elif exec_lower == "opencode":
+        exec_type = ExecutorType.OPENCODE
+    else:
+        exec_type = ExecutorType.AGY
     req = InvestigationRequest(
         target=target,
         error_logs=error_logs,
@@ -223,6 +235,34 @@ async def list_available_models_tool() -> str:
             "context_window": 262144,
             "pricing": "free",
         },
+        {
+            "id": "t3-agy-flash",
+            "executor": "t3",
+            "name": "T3 Code — Antigravity ACP (Gemini 3.8 Flash High)",
+            "context_window": 1048576,
+            "pricing": "free",
+        },
+        {
+            "id": "t3-agy-argon",
+            "executor": "t3",
+            "name": "T3 Code — Antigravity ACP (Gemini 4 Argon)",
+            "context_window": 1048576,
+            "pricing": "free",
+        },
+        {
+            "id": "t3-opencode-opus",
+            "executor": "t3",
+            "name": "T3 Code — OpenCode (Claude Opus 5.5 via google-agy)",
+            "context_window": 200000,
+            "pricing": "free",
+        },
+        {
+            "id": "t3-opencode-sonnet",
+            "executor": "t3",
+            "name": "T3 Code — OpenCode (Claude Sonnet 5.5 via google-agy)",
+            "context_window": 200000,
+            "pricing": "free",
+        },
     ]
     return json.dumps({"models": models, "count": len(models)}, indent=2)
 
@@ -246,8 +286,21 @@ async def check_executor_health_tool() -> str:
     except Exception:
         opencode_server_alive = False
 
+    # Check t3 CLI & background HTTP service
+    t3_exists = os.path.exists(settings.t3_cli_path)
+    t3_exec = os.access(settings.t3_cli_path, os.X_OK) if t3_exists else False
+    t3_server_alive = False
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(
+                f"{settings.t3_server_url.rstrip('/')}/.well-known/oauth-protected-resource"
+            )
+            t3_server_alive = resp.status_code in [200, 401, 403]
+    except Exception:
+        t3_server_alive = False
+
     status = {
-        "status": "healthy" if (agy_exec or opencode_exec) else "degraded",
+        "status": "healthy" if (agy_exec or opencode_exec or t3_exec) else "degraded",
         "executors": {
             "agy": {
                 "available": agy_exec,
@@ -260,6 +313,14 @@ async def check_executor_health_tool() -> str:
                 "executable": opencode_exec,
                 "server_url": settings.opencode_server_url,
                 "server_alive": opencode_server_alive,
+            },
+            "t3": {
+                "available": t3_exec,
+                "binary_path": settings.t3_cli_path,
+                "executable": t3_exec,
+                "server_url": settings.t3_server_url,
+                "ui_url": settings.t3_ui_url,
+                "server_alive": t3_server_alive,
             },
         },
     }

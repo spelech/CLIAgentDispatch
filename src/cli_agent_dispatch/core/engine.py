@@ -21,6 +21,7 @@ from cli_agent_dispatch.core.sre_prompts import (
 from cli_agent_dispatch.executors.agy import AgyExecutor
 from cli_agent_dispatch.executors.base import BaseExecutor
 from cli_agent_dispatch.executors.opencode import OpenCodeExecutor
+from cli_agent_dispatch.executors.t3 import T3Executor
 
 logger = logging.getLogger("CLIAgentDispatch.Engine")
 
@@ -116,6 +117,7 @@ class DispatchEngine:
         self._executors: dict[str, BaseExecutor] = {
             ExecutorType.OPENCODE.value: OpenCodeExecutor(),
             ExecutorType.AGY.value: AgyExecutor(),
+            ExecutorType.T3.value: T3Executor(),
         }
 
     def register_executor(self, executor: BaseExecutor) -> None:
