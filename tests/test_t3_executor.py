@@ -574,22 +574,23 @@ async def test_sso_pair_routes_and_ntfy_push(tmp_path: Any) -> None:
     ):
         client = TestClient(app)
 
-        # 1. Default 302 redirect into /pair#token=...
+        # 1. Redirect mode (?mode=redirect)
         resp_redir = client.get(
-            "/sso-pair",
+            "/sso-pair?mode=redirect",
             headers={"Remote-Name": "Steven Pelech"},
             follow_redirects=False,
         )
         assert resp_redir.status_code == 302
         assert resp_redir.headers["location"] == "https://ttt.wileyriley.com/pair#token=PAIRCODE99"
 
-        # 2. Card HTML mode with ntfy push
+        # 2. Default Card HTML mode (with Copy Pairing Code button & ntfy push)
         resp_card = client.get(
-            "/sso-pair?mode=card&notify=1",
+            "/sso-pair?notify=1",
             headers={"Remote-User": "steve"},
         )
         assert resp_card.status_code == 200
         assert "PAIRCODE99" in resp_card.text
+        assert "Copy Pairing Code" in resp_card.text
         assert "Sent to ntfy" in resp_card.text
 
         # 3. JSON mode

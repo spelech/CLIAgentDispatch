@@ -169,8 +169,13 @@ def _render_pair_card_html(pair_data: dict[str, Any], ntfy_sent: bool, user_labe
       color: #60a5fa;
       user-select: all;
     }}
-    a.btn {{
+    a.btn, button.btn {{
       display: block;
+      width: 100%;
+      box-sizing: border-box;
+      border: none;
+      cursor: pointer;
+      font-size: 0.96rem;
       background: #2563eb;
       color: #ffffff;
       text-decoration: none;
@@ -179,7 +184,7 @@ def _render_pair_card_html(pair_data: dict[str, Any], ntfy_sent: bool, user_labe
       border-radius: 10px;
       margin-bottom: 0.75rem;
     }}
-    a.btn.secondary {{
+    a.btn.secondary, button.btn.secondary {{
       background: #1f2937;
       color: #e5e7eb;
     }}
@@ -190,11 +195,31 @@ def _render_pair_card_html(pair_data: dict[str, Any], ntfy_sent: bool, user_labe
   <div class="card">
     <h1>🧵 T3 Code Device Pairing</h1>
     <p class="sub">Authenticated as <strong>{user_label}</strong></p>
-    <div class="code">{credential}</div>
-    <a class="btn" href="{pair_url}">Pair This Device Now</a>
+    <div class="code" id="pair-code">{credential}</div>
+    <button class="btn" type="button" onclick="copyText('{credential}', this, '📋 Copy Pairing Code')">📋 Copy Pairing Code</button>
+    <button class="btn secondary" type="button" onclick="copyText('{pair_url}', this, '🔗 Copy Pairing Link')">🔗 Copy Pairing Link</button>
+    <a class="btn secondary" href="{pair_url}">🚀 Pair This Browser Now</a>
     <a class="btn secondary" href="/sso-pair?mode=card&notify=1">📲 Push Link to ntfy (Phone / Tablet)</a>
-    <div class="meta">{ntfy_badge}<br/>Expires: {expires_at}</div>
+    <div class="meta">Server URL: <code>https://ttt.wileyriley.com</code><br/>{ntfy_badge}<br/>Expires: {expires_at}</div>
   </div>
+  <script>
+    async function copyText(val, btn, originalLabel) {{
+      try {{
+        await navigator.clipboard.writeText(val);
+        btn.textContent = "✅ Copied!";
+        setTimeout(() => {{ btn.textContent = originalLabel; }}, 2000);
+      }} catch (e) {{
+        const el = document.createElement("textarea");
+        el.value = val;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand("copy");
+        document.body.removeChild(el);
+        btn.textContent = "✅ Copied!";
+        setTimeout(() => {{ btn.textContent = originalLabel; }}, 2000);
+      }}
+    }}
+  </script>
 </body>
 </html>"""
 
@@ -209,8 +234,8 @@ async def sso_pair_t3(
     label: str | None = Query(default=None, description="Device label"),
     notify: bool = Query(default=False, description="Also push the magic pairing link to ntfy"),
     mode: str = Query(
-        default="redirect",
-        description="Response mode: 'redirect' (302 to /pair#token=...), 'card' (HTML page), or 'json'",
+        default="card",
+        description="Response mode: 'card' (HTML page with Copy Code & Pair buttons), 'redirect' (302 to /pair#token=...), or 'json'",
     ),
     topic: str | None = Query(default=None, description="Optional ntfy topic override"),
 ) -> RedirectResponse | HTMLResponse | JSONResponse:
