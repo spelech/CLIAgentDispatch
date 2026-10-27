@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import html as _html
 import json
 import logging
 import os
@@ -132,9 +133,10 @@ async def send_t3_pairing_ntfy(
 
 
 def _render_pair_card_html(pair_data: dict[str, Any], ntfy_sent: bool, user_label: str) -> str:
-    pair_url = pair_data["pair_url"]
-    credential = pair_data["credential"]
-    expires_at = pair_data.get("expires_at") or ""
+    pair_url = _html.escape(str(pair_data["pair_url"]), quote=True)
+    credential = _html.escape(str(pair_data["credential"]), quote=True)
+    expires_at = _html.escape(str(pair_data.get("expires_at") or ""), quote=True)
+    safe_user = _html.escape(str(user_label), quote=True)
     ntfy_badge = (
         "📲 Sent to ntfy (wileyriley-sso)"
         if ntfy_sent
@@ -208,7 +210,7 @@ def _render_pair_card_html(pair_data: dict[str, Any], ntfy_sent: bool, user_labe
 <body>
   <div class="card">
     <h1>🧵 T3 Code Device Pairing</h1>
-    <p class="sub">Authenticated as <strong>{user_label}</strong></p>
+    <p class="sub">Authenticated as <strong>{safe_user}</strong></p>
     <div class="code" id="pair-code">{credential}</div>
     <button class="btn" type="button" onclick="copyText('{credential}', this, '📋 Copy Pairing Code')">📋 Copy Pairing Code</button>
     <button class="btn secondary" type="button" onclick="copyText('{pair_url}', this, '🔗 Copy Pairing Link')">🔗 Copy Pairing Link</button>
@@ -297,16 +299,11 @@ async def sso_pair_t3(
 
 @router.get("/sso-pair/copy", response_class=HTMLResponse)
 @router.get("/v1/t3/pair/copy", response_class=HTMLResponse)
-async def sso_pair_copy_only(
-    code: str = Query(..., description="T3 pairing credential code to copy"),
-    expires: str = Query(default="", description="Optional expiration timestamp"),
-) -> HTMLResponse:
+async def sso_pair_copy_only() -> HTMLResponse:
     """
     Lightweight clipboard-copy helper opened by the ntfy 'Copy Code' action button.
     Does NOT open the T3 Code web app or consume the single-use pairing token.
     """
-    safe_code = "".join(ch for ch in code if ch.isalnum() or ch in ("-", "_"))[:32]
-    safe_expires = "".join(ch for ch in expires if ch.isalnum() or ch in ("-", ":", ".", " "))[:40]
     ui_url = settings.t3_ui_url.rstrip("/")
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -371,13 +368,20 @@ async def sso_pair_copy_only(
   <div class="card">
     <h1>📋 T3 Mobile App Pairing Code</h1>
     <p class="sub" id="status-msg">Tap below to copy for the T3 mobile app (token is NOT consumed here)</p>
-    <div class="code" id="code-box">{safe_code}</div>
-    <button class="btn" id="copy-btn" type="button" onclick="copyCode()">📋 Copy Code: {safe_code}</button>
-    <div class="meta">Server URL: <code>{ui_url}</code><br/>Expires: {safe_expires}</div>
+    <div class="code" id="code-box">---</div>
+    <button class="btn" id="copy-btn" type="button" onclick="copyCode()">📋 Copy Pairing Code</button>
+    <div class="meta">Server URL: <code>{ui_url}</code><br/><span id="exp-box"></span></div>
   </div>
   <script>
-    const CODE = "{safe_code}";
+    const params = new URLSearchParams(window.location.search);
+    const CODE = (params.get("code") || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32);
+    const EXP = (params.get("expires") || "").slice(0, 40);
+    document.getElementById("code-box").textContent = CODE || "No code";
+    if (EXP) {{
+      document.getElementById("exp-box").textContent = "Expires: " + EXP;
+    }}
     async function copyCode() {{
+      if (!CODE) return;
       const btn = document.getElementById("copy-btn");
       const status = document.getElementById("status-msg");
       try {{

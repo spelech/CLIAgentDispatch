@@ -604,7 +604,7 @@ async def test_sso_pair_routes_and_ntfy_push(tmp_path: Any) -> None:
         # 4. Copy-only helper route (/sso-pair/copy)
         resp_copy = client.get("/sso-pair/copy?code=PAIRCODE99&expires=15m")
         assert resp_copy.status_code == 200
-        assert "Copy Code: PAIRCODE99" in resp_copy.text
+        assert "T3 Mobile App Pairing Code" in resp_copy.text
 
         # Verify ntfy payload omits "click" (so clicking opens ntfy notification)
         # and includes "📋 Copy Code" + "🚀 Pair This Browser" actions
