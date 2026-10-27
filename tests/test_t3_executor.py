@@ -28,7 +28,11 @@ from cli_agent_dispatch.executors.t3 import (
     normalize_t3_model_selection,
 )
 from cli_agent_dispatch.main import app
-from cli_agent_dispatch.mcp.server import check_executor_health_tool, list_available_models_tool
+from cli_agent_dispatch.mcp.server import (
+    check_executor_health_tool,
+    generate_t3_pairing_link_tool,
+    list_available_models_tool,
+)
 
 # ---------------------------------------------------------------------------
 # 1. Unit Tests: Model & Provider Normalization
@@ -530,6 +534,78 @@ async def test_t3_mcp_client_protocol_and_oauth_flow(tmp_path: Any) -> None:
     loaded_tok = await client2.get_token()
     assert loaded_tok == "tok-minted-1"
     assert T3McpError("boom").args[0] == "boom"
+
+
+@pytest.mark.asyncio
+async def test_sso_pair_routes_and_ntfy_push(tmp_path: Any) -> None:
+    """Test `/sso-pair` and `/v1/t3/pair` redirect, card, JSON, ntfy push, and MCP tool."""
+    fake_cli = str(tmp_path / "t3")
+    with open(fake_cli, "w", encoding="utf-8") as f:
+        f.write("#!/bin/sh\n")
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(
+        return_value=(
+            json.dumps(
+                {
+                    "id": "pair-id-1",
+                    "credential": "PAIRCODE99",
+                    "label": "Steve (15m)",
+                    "expiresAt": "2026-10-27T05:00:00Z",
+                    "pairUrl": "https://ttt.wileyriley.com/pair#token=PAIRCODE99",
+                }
+            ).encode("utf-8"),
+            b"",
+        )
+    )
+
+    ntfy_http = AsyncMock()
+    ntfy_http.__aenter__.return_value = ntfy_http
+    ntfy_resp = MagicMock()
+    ntfy_resp.status_code = 200
+    ntfy_resp.raise_for_status = MagicMock()
+    ntfy_http.post = AsyncMock(return_value=ntfy_resp)
+
+    with (
+        patch.object(settings, "t3_cli_path", fake_cli),
+        patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+        patch("cli_agent_dispatch.api.t3_pair_routes.httpx.AsyncClient", return_value=ntfy_http),
+    ):
+        client = TestClient(app)
+
+        # 1. Default 302 redirect into /pair#token=...
+        resp_redir = client.get(
+            "/sso-pair",
+            headers={"Remote-Name": "Steven Pelech"},
+            follow_redirects=False,
+        )
+        assert resp_redir.status_code == 302
+        assert resp_redir.headers["location"] == "https://ttt.wileyriley.com/pair#token=PAIRCODE99"
+
+        # 2. Card HTML mode with ntfy push
+        resp_card = client.get(
+            "/sso-pair?mode=card&notify=1",
+            headers={"Remote-User": "steve"},
+        )
+        assert resp_card.status_code == 200
+        assert "PAIRCODE99" in resp_card.text
+        assert "Sent to ntfy" in resp_card.text
+
+        # 3. JSON mode
+        resp_json = client.get("/v1/t3/pair?mode=json&notify=1")
+        assert resp_json.status_code == 200
+        jdata = resp_json.json()
+        assert jdata["credential"] == "PAIRCODE99"
+        assert jdata["pair_url"] == "https://ttt.wileyriley.com/pair#token=PAIRCODE99"
+        assert jdata["ntfy_sent"] is True
+
+        # 4. MCP tool generate_t3_pairing_link
+        mcp_out = json.loads(
+            await generate_t3_pairing_link_tool(ttl="1h", label="Tablet", send_ntfy=True)
+        )
+        assert mcp_out["credential"] == "PAIRCODE99"
+        assert mcp_out["ntfy_sent"] is True
 
 
 # ---------------------------------------------------------------------------
