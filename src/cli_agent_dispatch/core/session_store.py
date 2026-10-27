@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -33,6 +34,7 @@ class SessionStore:
         self.default_ttl = default_ttl_seconds
         self._sessions: dict[str, SessionRecord] = {}
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        self._cancel_callbacks: dict[str, Callable[[], Awaitable[bool]]] = {}
         self._cancelled_runs: set[str] = set()
         self._lock = asyncio.Lock()
 
@@ -45,36 +47,62 @@ class SessionStore:
         """Unregister an OS subprocess once execution completes."""
         self._active_processes.pop(client_id, None)
 
+    def register_cancel_callback(
+        self, client_id: str, callback: Callable[[], Awaitable[bool]]
+    ) -> None:
+        """Register an async cancellation callback (e.g., for T3 thread interruption)."""
+        self._cancel_callbacks[client_id] = callback
+        self._cancelled_runs.discard(client_id)
+
+    def unregister_cancel_callback(self, client_id: str) -> None:
+        """Unregister an async cancellation callback once execution completes."""
+        self._cancel_callbacks.pop(client_id, None)
+
     def was_cancelled(self, client_id: str) -> bool:
         """Return True if a run/session was explicitly cancelled by user."""
         return client_id in self._cancelled_runs
 
     def active_process_ids(self) -> list[str]:
-        """Return list of currently active process keys."""
-        return [k for k, proc in list(self._active_processes.items()) if proc.returncode is None]
+        """Return list of currently active process or run keys."""
+        proc_ids = [
+            k for k, proc in list(self._active_processes.items()) if proc.returncode is None
+        ]
+        cb_ids = [k for k in self._cancel_callbacks if k not in proc_ids]
+        return proc_ids + cb_ids
 
     async def kill_active_process(self, client_id: str) -> bool:
-        """Terminate and kill any running OS subprocess for a session."""
+        """Terminate and kill any running OS subprocess or active callback for a session."""
+        cb = self._cancel_callbacks.pop(client_id, None)
         proc = self._active_processes.pop(client_id, None)
-        if not proc:
+        if not proc and not cb:
             return False
         self._cancelled_runs.add(client_id)
-        try:
-            if proc.returncode is None:
-                proc.terminate()
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=1.5)
-                except TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-            return True
-        except Exception:
-            return False
+        killed = False
+        if cb:
+            try:
+                killed = await cb() or True
+            except Exception:
+                killed = True
+        if proc:
+            try:
+                if proc.returncode is None:
+                    proc.terminate()
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=1.5)
+                    except TimeoutError:
+                        proc.kill()
+                        await proc.wait()
+                killed = True
+            except Exception:
+                pass
+        return killed
 
     async def cancel_all_active(self) -> list[str]:
-        """Terminate and kill all currently running OS subprocesses across active turns."""
+        """Terminate and kill all currently running OS subprocesses and callbacks across active turns."""
         cancelled: list[str] = []
-        active_keys = list(self._active_processes.keys())
+        active_keys = list(
+            dict.fromkeys(list(self._active_processes.keys()) + list(self._cancel_callbacks.keys()))
+        )
         for key in active_keys:
             if await self.kill_active_process(key):
                 cancelled.append(key)

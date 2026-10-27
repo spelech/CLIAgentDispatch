@@ -21,6 +21,7 @@ from cli_agent_dispatch.core.models import (
 )
 from cli_agent_dispatch.core.session_store import session_store
 from cli_agent_dispatch.executors.agy import discover_agy_models
+from cli_agent_dispatch.executors.t3 import T3_STATIC_ALIASES, discover_t3_models
 
 router = APIRouter(prefix="/v1", tags=["OpenAI Compatibility"])
 
@@ -47,6 +48,7 @@ STATIC_MODEL_ALIASES = [
     "claude-sonnet-5.5",
     "claude-opus-5.5",
     "gpt-oss-120b",
+    *T3_STATIC_ALIASES,
 ]
 
 AVAILABLE_MODELS = [ModelCard(id=m) for m in STATIC_MODEL_ALIASES]
@@ -68,6 +70,9 @@ def _build_available_models() -> list[ModelCard]:
         _add(model_id)
         _add(display_name)
 
+    for t3_model in discover_t3_models():
+        _add(t3_model)
+
     return cards
 
 
@@ -85,6 +90,9 @@ def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | No
             break
 
     name_lower = raw.lower()
+    if name_lower == "t3" or name_lower.startswith(("t3-", "t3/", "t3_")):
+        return ExecutorType.T3, raw
+
     discovered = discover_agy_models()
     discovered_keys = {k.lower() for k in discovered.keys()} | {
         v.lower() for v in discovered.values()

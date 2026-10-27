@@ -42,6 +42,8 @@ def _resolve_session_executor(session_id: str, executor: ExecutorType | None) ->
         return executor
     if session_id in _SESSION_EXECUTORS:
         return _SESSION_EXECUTORS[session_id]
+    if session_id.startswith("mcp:"):
+        return ExecutorType.T3
     if session_id.startswith("conv_") or "agy" in session_id.lower():
         return ExecutorType.AGY
     return ExecutorType.OPENCODE

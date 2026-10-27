@@ -481,6 +481,7 @@ class SlackActivityTracker:
         scope: str,
         prompt: str,
         enabled: bool = True,
+        t3_ui_url: str | None = None,
     ):
         self.run_id = run_id
         self.model = model
@@ -489,6 +490,7 @@ class SlackActivityTracker:
         self.channel = _resolve_slack_channel(prompt)
         self.token = _resolve_slack_bot_token() if enabled else None
         self.enabled = bool(enabled and self.token and self.channel)
+        self.t3_ui_url = t3_ui_url
         self.message_ts: str | None = None
         self.steps: dict[Any, dict[str, Any]] = {}
         self.step_order: list[Any] = []
@@ -559,6 +561,15 @@ class SlackActivityTracker:
                     "style": "danger",
                     "action_id": "abort_agy_turn",
                     "value": self.run_id,
+                }
+            )
+        if self.t3_ui_url:
+            action_elements.append(
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "🧵 Hijack in T3 Code", "emoji": True},
+                    "url": self.t3_ui_url,
+                    "action_id": "open_t3_ui",
                 }
             )
         action_elements.append(

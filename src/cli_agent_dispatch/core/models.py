@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class ExecutorType(StrEnum):
     OPENCODE = "opencode"
     AGY = "agy"
+    T3 = "t3"
 
 
 class TaskRequest(BaseModel):
