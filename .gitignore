@@ -33,3 +33,4 @@ venv.bak/
 .coverage
 htmlcov/
 .ruff_cache/
+*.db

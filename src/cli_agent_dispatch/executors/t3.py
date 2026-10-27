@@ -579,7 +579,7 @@ class T3McpClient:
                     "params": {
                         "protocolVersion": MCP_PROTOCOL_VERSION,
                         "capabilities": {},
-                        "clientInfo": {"name": "cli-agent-dispatch", "version": "0.3.3"},
+                        "clientInfo": {"name": "cli-agent-dispatch", "version": "0.4.0"},
                     },
                 },
             )
