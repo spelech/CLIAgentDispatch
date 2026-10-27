@@ -41,6 +41,11 @@ class Settings(BaseSettings):
         alias="T3_TOKEN_CACHE_PATH",
     )
 
+    # ntfy Push Notification Configuration
+    ntfy_url: str = Field(default="http://10.0.0.10:9010/wileyriley-sso", alias="NTFY_URL")
+    ntfy_user: str = Field(default="steve", alias="NTFY_USER")
+    ntfy_pass: str = Field(default="topfire89", alias="NTFY_PASS")
+
     # Execution Defaults
     default_timeout: int = Field(default=180, alias="DEFAULT_TIMEOUT")
     default_workspace: str = Field(default="/containers", alias="DEFAULT_WORKSPACE")

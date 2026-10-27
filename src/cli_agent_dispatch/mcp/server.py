@@ -11,6 +11,7 @@ try:
 except ImportError:
     from mcp.server import MCPServer
 
+from cli_agent_dispatch.api.t3_pair_routes import create_t3_pairing_link, send_t3_pairing_ntfy
 from cli_agent_dispatch.config import settings
 from cli_agent_dispatch.core.engine import engine
 from cli_agent_dispatch.core.models import ExecutorType, InvestigationRequest, TaskRequest
@@ -382,3 +383,23 @@ async def inspect_workspace_diff_tool(workspace: str = "/containers") -> str:
         )
     except Exception as e:
         return json.dumps({"error": f"Failed to inspect workspace: {e}"}, indent=2)
+
+
+@mcp_server.tool(name="generate_t3_pairing_link")
+async def generate_t3_pairing_link_tool(
+    ttl: str = "15m",
+    label: str = "Mobile / Remote Device",
+    send_ntfy: bool = True,
+) -> str:
+    """Generate a T3 Code client pairing link (`https://ttt.wileyriley.com/pair#token=...`) and push it to ntfy.
+
+    Args:
+        ttl: Credential expiration TTL (e.g. '15m', '1h', '24h').
+        label: Human-readable label for the device being paired.
+        send_ntfy: Whether to also push a 1-tap notification to ntfy ('wileyriley-sso').
+    """
+    pair_data = await create_t3_pairing_link(ttl=ttl, label=label)
+    ntfy_sent = False
+    if send_ntfy:
+        ntfy_sent = await send_t3_pairing_ntfy(pair_data)
+    return json.dumps({**pair_data, "ntfy_sent": ntfy_sent}, indent=2)

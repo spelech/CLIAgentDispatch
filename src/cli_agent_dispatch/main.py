@@ -8,6 +8,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from cli_agent_dispatch.api.anthropic_routes import router as anthropic_router
 from cli_agent_dispatch.api.openai_routes import router as openai_router
 from cli_agent_dispatch.api.session_routes import router as session_router
+from cli_agent_dispatch.api.t3_pair_routes import router as t3_pair_router
 from cli_agent_dispatch.config import settings
 from cli_agent_dispatch.infrastructure.taps import diagnostic_buffer
 from cli_agent_dispatch.mcp.server import mcp_server
@@ -49,6 +50,9 @@ app.include_router(anthropic_router)
 
 # Register Interactive Sessions and SRE Investigation Router (/v1/investigate, /v1/sessions)
 app.include_router(session_router)
+
+# Register T3 Code SSO Pairing & ntfy Push Router (/sso-pair, /v1/t3/pair)
+app.include_router(t3_pair_router)
 
 # Mount MCP SSE Application (handles /sse and /messages)
 transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
