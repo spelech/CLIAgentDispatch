@@ -80,23 +80,37 @@ async def send_t3_pairing_ntfy(
     credential = str(pair_data["credential"])
     label = str(pair_data.get("label") or "Mobile / Remote Device")
     expires_at = str(pair_data.get("expires_at") or "15m")
+    ui_url = str(pair_data.get("ui_url") or settings.t3_ui_url).rstrip("/")
+    copy_url = f"{ui_url}/sso-pair/copy?" + urllib.parse.urlencode(
+        {"code": credential, "expires": expires_at}
+    )
 
+    # Note: Do NOT set "click" so tapping the notification body simply opens
+    # the notification inside the ntfy app without launching the T3 site.
     payload = {
         "topic": topic,
-        "title": f"T3 Code Pairing Link ({label})",
+        "title": f"T3 Code Pairing ({label})",
+        "markdown": True,
         "message": (
-            f"Tap below to pair T3 Code on {label}.\nCode: {credential}\nExpires: {expires_at}"
+            f"Pairing code for **{label}** (Server: `{ui_url}`):\n"
+            f"```\n{credential}\n```\n"
+            f"Expires: `{expires_at}`"
         ),
         "priority": 4,
         "tags": ["key", "thread"],
-        "click": pair_url,
         "actions": [
             {
                 "action": "view",
-                "label": "🧵 Pair T3 Code Now",
+                "label": "📋 Copy Code",
+                "url": copy_url,
+                "clear": False,
+            },
+            {
+                "action": "view",
+                "label": "🚀 Pair This Browser",
                 "url": pair_url,
                 "clear": True,
-            }
+            },
         ],
     }
 
@@ -279,3 +293,110 @@ async def sso_pair_t3(
         return HTMLResponse(_render_pair_card_html(pair_data, ntfy_sent, remote_user))
 
     return RedirectResponse(url=pair_data["pair_url"], status_code=302)
+
+
+@router.get("/sso-pair/copy", response_class=HTMLResponse)
+@router.get("/v1/t3/pair/copy", response_class=HTMLResponse)
+async def sso_pair_copy_only(
+    code: str = Query(..., description="T3 pairing credential code to copy"),
+    expires: str = Query(default="", description="Optional expiration timestamp"),
+) -> HTMLResponse:
+    """
+    Lightweight clipboard-copy helper opened by the ntfy 'Copy Code' action button.
+    Does NOT open the T3 Code web app or consume the single-use pairing token.
+    """
+    safe_code = "".join(ch for ch in code if ch.isalnum() or ch in ("-", "_"))[:32]
+    safe_expires = "".join(ch for ch in expires if ch.isalnum() or ch in ("-", ":", ".", " "))[:40]
+    ui_url = settings.t3_ui_url.rstrip("/")
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Copy T3 Pairing Code</title>
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #090d16;
+      color: #f3f4f6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 1.25rem;
+      box-sizing: border-box;
+    }}
+    .card {{
+      max-width: 420px;
+      width: 100%;
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 16px;
+      padding: 2rem;
+      text-align: center;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+    }}
+    h1 {{ font-size: 1.25rem; margin: 0 0 0.5rem; }}
+    p.sub {{ color: #9ca3af; font-size: 0.9rem; margin: 0 0 1.25rem; }}
+    .code {{
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 1.65rem;
+      letter-spacing: 0.14em;
+      background: #0b0f19;
+      border: 1px solid #374151;
+      border-radius: 10px;
+      padding: 0.9rem;
+      margin-bottom: 1.25rem;
+      color: #60a5fa;
+      user-select: all;
+    }}
+    button.btn {{
+      display: block;
+      width: 100%;
+      border: none;
+      cursor: pointer;
+      font-size: 1rem;
+      background: #2563eb;
+      color: #ffffff;
+      font-weight: 600;
+      padding: 0.95rem 1.25rem;
+      border-radius: 10px;
+      margin-bottom: 0.75rem;
+    }}
+    .meta {{ color: #6b7280; font-size: 0.8rem; margin-top: 1rem; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📋 T3 Mobile App Pairing Code</h1>
+    <p class="sub" id="status-msg">Tap below to copy for the T3 mobile app (token is NOT consumed here)</p>
+    <div class="code" id="code-box">{safe_code}</div>
+    <button class="btn" id="copy-btn" type="button" onclick="copyCode()">📋 Copy Code: {safe_code}</button>
+    <div class="meta">Server URL: <code>{ui_url}</code><br/>Expires: {safe_expires}</div>
+  </div>
+  <script>
+    const CODE = "{safe_code}";
+    async function copyCode() {{
+      const btn = document.getElementById("copy-btn");
+      const status = document.getElementById("status-msg");
+      try {{
+        await navigator.clipboard.writeText(CODE);
+        btn.textContent = "✅ Copied to Clipboard!";
+        status.textContent = "Paste this code into your T3 mobile/tablet app.";
+      }} catch (e) {{
+        const el = document.createElement("textarea");
+        el.value = CODE;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand("copy");
+        document.body.removeChild(el);
+        btn.textContent = "✅ Copied to Clipboard!";
+        status.textContent = "Paste this code into your T3 mobile/tablet app.";
+      }}
+    }}
+    window.addEventListener("DOMContentLoaded", () => {{ copyCode(); }});
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(html)

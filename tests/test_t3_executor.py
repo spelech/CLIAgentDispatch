@@ -601,7 +601,21 @@ async def test_sso_pair_routes_and_ntfy_push(tmp_path: Any) -> None:
         assert jdata["pair_url"] == "https://ttt.wileyriley.com/pair#token=PAIRCODE99"
         assert jdata["ntfy_sent"] is True
 
-        # 4. MCP tool generate_t3_pairing_link
+        # 4. Copy-only helper route (/sso-pair/copy)
+        resp_copy = client.get("/sso-pair/copy?code=PAIRCODE99&expires=15m")
+        assert resp_copy.status_code == 200
+        assert "Copy Code: PAIRCODE99" in resp_copy.text
+
+        # Verify ntfy payload omits "click" (so clicking opens ntfy notification)
+        # and includes "📋 Copy Code" + "🚀 Pair This Browser" actions
+        ntfy_payload = ntfy_http.post.call_args.kwargs["json"]
+        assert "click" not in ntfy_payload
+        assert ntfy_payload["markdown"] is True
+        action_labels = [a["label"] for a in ntfy_payload["actions"]]
+        assert "📋 Copy Code" in action_labels
+        assert "🚀 Pair This Browser" in action_labels
+
+        # 5. MCP tool generate_t3_pairing_link
         mcp_out = json.loads(
             await generate_t3_pairing_link_tool(ttl="1h", label="Tablet", send_ntfy=True)
         )
@@ -613,7 +627,7 @@ async def test_sso_pair_routes_and_ntfy_push(tmp_path: Any) -> None:
 # 3. Live End-to-End (E2E) Tests against Running T3 Daemon (127.0.0.1:3773)
 # ---------------------------------------------------------------------------
 
-_LIVE_T3_AVAILABLE = bool(
+_LIVE_T3_AVAILABLE = os.environ.get("RUN_LIVE_T3_E2E") == "1" and bool(
     os.path.exists(settings.t3_cli_path) or shutil.which(settings.t3_cli_path)
 )
 
