@@ -34,3 +34,4 @@ venv.bak/
 htmlcov/
 .ruff_cache/
 *.db
+.worktrees/
