@@ -1,12 +1,11 @@
 """Tests for SRE prompt detection, metadata extraction, semantic thread titling, and sanitization."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cli_agent_dispatch.core.models import TaskRequest
+from cli_agent_dispatch.core.models import InvestigationRequest, TaskRequest
 from cli_agent_dispatch.core.sre_prompts import build_investigation_prompt
-from cli_agent_dispatch.core.models import InvestigationRequest
 from cli_agent_dispatch.executors.t3 import (
     T3Executor,
     build_sre_thread_title,
@@ -233,4 +232,3 @@ syntax error in configuration.yml
     kwargs = mock_client.launch_thread.call_args[1]
     assert kwargs["title"] == "🚨 [SRE] authelia (config_invalid | exit 2)"
     assert "=== SRE INCIDENT INVESTIGATION REQUEST ===" in kwargs["message"]
-

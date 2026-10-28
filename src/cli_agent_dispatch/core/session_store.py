@@ -21,7 +21,9 @@ class SessionRecord(BaseModel):
     last_active_at: float = Field(default_factory=time.time)
     turn_count: int = Field(default=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
-    ephemeral: bool = Field(default=False, description="Whether this session is ephemeral/temporary.")
+    ephemeral: bool = Field(
+        default=False, description="Whether this session is ephemeral/temporary."
+    )
     expires_at: float | None = Field(
         default=None, description="Timestamp after which ephemeral session expires."
     )
@@ -161,9 +163,7 @@ class SessionStore:
             self._sessions[client_id] = new_record
             return new_record
 
-    async def get_expired_ephemeral_sessions(
-        self, now: float | None = None
-    ) -> list[SessionRecord]:
+    async def get_expired_ephemeral_sessions(self, now: float | None = None) -> list[SessionRecord]:
         """Return list of ephemeral sessions whose expiration time has passed and are not yet archived."""
         current_time = now if now is not None else time.time()
         async with self._lock:

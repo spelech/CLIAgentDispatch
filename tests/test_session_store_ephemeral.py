@@ -7,7 +7,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from cli_agent_dispatch.core.models import ExecutorType, TaskResult
-from cli_agent_dispatch.core.session_store import SessionRecord, SessionStore, session_store
+from cli_agent_dispatch.core.session_store import SessionStore, session_store
 from cli_agent_dispatch.main import app, reap_expired_ephemeral_sessions
 
 
@@ -56,9 +56,7 @@ async def test_session_record_ephemeral_and_expiration():
 
 @pytest.mark.asyncio
 async def test_archive_session_endpoint():
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # 1. Archive non-existent session
         resp_404 = await client.post("/v1/sessions/non_existent_session_id/archive")
         assert resp_404.status_code == 404
@@ -136,9 +134,7 @@ async def test_reap_expired_ephemeral_sessions():
 
 @pytest.mark.asyncio
 async def test_openai_route_registers_sre_session_as_ephemeral():
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         sre_prompt = """=== SRE INCIDENT INVESTIGATION REQUEST ===
 Target Service / Container: homebox
 Exit Code / Status: 137 (OOMKilled)
@@ -201,7 +197,7 @@ async def test_reaper_handles_t3_error_gracefully():
 @pytest.mark.asyncio
 async def test_lifespan_starts_and_cancels_reaper():
     from cli_agent_dispatch.main import lifespan
+
     test_app = MagicMock()
     async with lifespan(test_app):
         pass
-

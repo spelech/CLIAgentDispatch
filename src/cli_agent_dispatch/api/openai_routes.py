@@ -265,6 +265,7 @@ async def create_chat_completion(
             active_client_id = client_session_id or f"session_{uuid.uuid4().hex[:12]}"
 
             if request.stream:
+
                 async def _stream_heartbeat_no_reply() -> AsyncGenerator[str, None]:
                     created = int(time.time())
                     chunk_payload = {
@@ -335,7 +336,7 @@ async def create_chat_completion(
 
     # Ephemeral session calculation for SRE incidents mapped to T3
     is_sre = is_sre_incident_prompt(prompt_text) or is_sre_incident_prompt(system_text or "")
-    is_ephemeral = (exec_type == ExecutorType.T3 and is_sre)
+    is_ephemeral = exec_type == ExecutorType.T3 and is_sre
     expires_at = time.time() + 86400 if is_ephemeral else None
 
     task_req = TaskRequest(

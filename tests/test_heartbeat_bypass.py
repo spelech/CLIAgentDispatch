@@ -41,9 +41,7 @@ def test_is_heartbeat_turn_detection():
 
 @pytest.mark.asyncio
 async def test_heartbeat_bypass_immediate_no_reply_non_streaming():
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         payload = {
             "model": "t3",
             "messages": [
@@ -63,9 +61,7 @@ async def test_heartbeat_bypass_immediate_no_reply_non_streaming():
 
 @pytest.mark.asyncio
 async def test_heartbeat_bypass_immediate_no_reply_streaming():
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         payload = {
             "model": "t3-agy-flash",
             "messages": [
@@ -87,9 +83,7 @@ async def test_heartbeat_bypass_immediate_no_reply_streaming():
 async def test_heartbeat_bypass_with_fast_inference_env_var(monkeypatch):
     monkeypatch.setenv("OPENCLAW_HEARTBEAT_FAST_INFERENCE", "1")
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         payload = {
             "model": "t3",
             "messages": [

@@ -304,13 +304,9 @@ def is_sre_incident_prompt(prompt: str | None) -> bool:
     if SRE_REQUEST_HEADER.upper() in prompt_upper:
         return True
     has_diag = (
-        DIAGNOSTIC_ENVELOPE_HEADER in prompt
-        or DIAGNOSTIC_ENVELOPE_HEADER.upper() in prompt_upper
+        DIAGNOSTIC_ENVELOPE_HEADER in prompt or DIAGNOSTIC_ENVELOPE_HEADER.upper() in prompt_upper
     )
-    has_openclaw = (
-        OPENCLAW_SRE_KEYWORD in prompt
-        or OPENCLAW_SRE_KEYWORD.upper() in prompt_upper
-    )
+    has_openclaw = OPENCLAW_SRE_KEYWORD in prompt or OPENCLAW_SRE_KEYWORD.upper() in prompt_upper
     return has_diag and has_openclaw
 
 
