@@ -35,6 +35,19 @@ TITLE_MAX_CHARS = 80
 
 T3_STATIC_ALIASES: list[str] = [
     "t3",
+    "t3-vertex",
+    "t3-vertex-flash",
+    "t3-vertex-flash-lite",
+    "t3-openrouter",
+    "t3-openrouter-deepseek",
+    "t3-deepseek",
+    "t3-deepseek-flash",
+    "t3-deepseek-pro",
+    "t3-glm",
+    "t3-glm-flash",
+    "t3-qwen",
+    "t3-qwen-flash",
+    "t3-qwen-max",
     "t3-agy",
     "t3-agy-flash",
     "t3-agy-flash-low",
@@ -48,11 +61,15 @@ T3_STATIC_ALIASES: list[str] = [
     "t3-agy-sonnet",
     "t3-opencode",
     "t3-opencode-flash",
+    "t3-opencode-flash-lite",
     "t3-opencode-argon",
     "t3-opencode-opus",
     "t3-opencode-sonnet",
     "t3-opencode-glm",
+    "t3-opencode-glm-flash",
+    "t3-opencode-deepseek-flash",
     "t3-opencode-deepseek-pro",
+    "t3-opencode-qwen-flash",
     "t3-opencode-qwen-max",
 ]
 
@@ -105,18 +122,54 @@ def _normalize_opencode_slug(raw_slug: str) -> str:
     if "/" in slug:
         return slug
     lower = slug.lower()
+    # Explicit Google AGY models (routed via OpenCode's google-agy plugin)
     if "opus" in lower:
         return "google-agy/claude-opus-5-5"
     if "sonnet" in lower or "claude" in lower:
         return "google-agy/claude-sonnet-5-5"
-    if "argon" in lower:
-        return "google-agy/gemini-4-argon"
     if "gpt-oss" in lower or "oss-120b" in lower:
         return "google-agy/gpt-oss-120b-medium"
-    if lower in ("default", "opencode", "opencode-default", "flash", "gemini", "gemini-3.8-flash"):
+    if "agy-argon" in lower or "google-agy/argon" in lower:
+        return "google-agy/gemini-4-argon"
+    if "agy-flash" in lower or "google-agy/flash" in lower:
         return "google-agy/gemini-3.8-flash"
+
+    # Vertex AI models (via OpenCode LiteLLM Gateway)
+    if lower in ("flash-lite", "flash-lite-latest", "vertex-flash-lite"):
+        return "litellm/flash-lite-latest"
+    if lower in (
+        "vertex",
+        "vertex-flash",
+        "flash",
+        "flash-latest",
+        "default",
+        "opencode",
+        "opencode-default",
+    ):
+        return "litellm/flash-latest"
+
+    # OpenRouter & LiteLLM Gateway models
+    if lower in ("openrouter", "deepseek", "deepseek-flash", "deepseek-v4.1-flash"):
+        return "litellm/deepseek-flash"
+    if lower in ("deepseek-pro", "deepseek-v4-pro"):
+        return "litellm/deepseek-pro"
+    if lower in ("glm-flash", "glm-5.3-flash"):
+        return "litellm/glm-flash"
+    if lower in ("glm", "glm-5.3"):
+        return "litellm/glm"
+    if lower in ("qwen-max", "qwen3.8-max"):
+        return "litellm/qwen-max"
+    if lower in ("qwen-cheap", "qwen3.8-27b"):
+        return "litellm/qwen-cheap"
+    if lower in ("qwen", "qwen-flash", "qwen3.8-flash"):
+        return "litellm/qwen-flash"
+    if "argon" in lower:
+        return "litellm/argon"
+    if lower in ("hy3", "hy4", "jev-router"):
+        return f"litellm/{lower}"
     if lower.startswith("gemini"):
-        return "google-agy/gemini-3.8-flash"
+        return "litellm/flash-latest"
+
     return f"litellm/{slug}"
 
 
@@ -169,7 +222,7 @@ def normalize_t3_model_selection(
 
     if not raw:
         if explicit_prov == "opencode":
-            return ("opencode", "google-agy/gemini-3.8-flash")
+            return ("opencode", "litellm/flash-latest")
         tier = _resolve_tier("", effort, default_tier="high")
         return ("antigravity", f"gemini-3.8-flash-{tier}")
 
@@ -210,9 +263,36 @@ def normalize_t3_model_selection(
             return ("opencode", _normalize_opencode_slug(lower))
         return ("antigravity", lower)
 
-    # 4. Explicit `t3-opencode*` aliases
-    if lower == "t3-opencode" or lower == "t3-opencode-default":
-        return ("opencode", "google-agy/gemini-3.8-flash")
+    # 4. Explicit `t3-vertex*` / `t3-openrouter*` / `t3-opencode*` / `t3-deepseek*` aliases
+    if lower in ("t3-vertex", "t3-vertex-flash"):
+        return ("opencode", "litellm/flash-latest")
+    if lower in ("t3-vertex-flash-lite", "t3-opencode-flash-lite"):
+        return ("opencode", "litellm/flash-lite-latest")
+    if lower in (
+        "t3-openrouter",
+        "t3-openrouter-deepseek",
+        "t3-deepseek",
+        "t3-deepseek-flash",
+        "t3-opencode-deepseek-flash",
+    ):
+        return ("opencode", "litellm/deepseek-flash")
+    if lower in ("t3-deepseek-pro", "t3-opencode-deepseek-pro"):
+        return ("opencode", "litellm/deepseek-pro")
+    if lower in ("t3-glm", "t3-opencode-glm"):
+        return ("opencode", "litellm/glm")
+    if lower in ("t3-glm-flash", "t3-opencode-glm-flash"):
+        return ("opencode", "litellm/glm-flash")
+    if lower in ("t3-qwen", "t3-qwen-flash", "t3-opencode-qwen-flash"):
+        return ("opencode", "litellm/qwen-flash")
+    if lower in ("t3-qwen-max", "t3-opencode-qwen-max"):
+        return ("opencode", "litellm/qwen-max")
+    if lower in (
+        "t3-opencode",
+        "t3-opencode-default",
+        "t3-opencode-flash",
+        "t3-flash-latest",
+    ):
+        return ("opencode", "litellm/flash-latest")
     if lower.startswith("t3-opencode-"):
         suffix = raw[len("t3-opencode-") :].strip()
         return ("opencode", _normalize_opencode_slug(suffix))
@@ -235,20 +315,17 @@ def normalize_t3_model_selection(
         tier = _resolve_tier(lower, effort, default_tier="medium")
         return ("antigravity", f"gemini-4-argon-{tier}")
 
-    # 8. Default / Flash / Gemini aliases -> Antigravity ACP
-    if lower in (
-        "t3",
-        "t3-default",
-        "t3-agy",
-        "t3-flash",
-        "t3-agy-flash",
-        "t3-gemini",
-        "t3-agy-gemini",
-    ) or ("flash" in lower or "gemini" in lower):
+    # 8. Explicit `t3-agy*` aliases
+    if lower.startswith("t3-agy"):
         tier = _resolve_tier(lower, effort, default_tier="high")
         return ("antigravity", f"gemini-3.8-flash-{tier}")
 
-    # 9. Any other `t3-<model>` -> if not matching Gemini/Argon, route to OpenCode
+    # 9. Default `t3` or `t3-flash`
+    if lower in ("t3", "t3-default", "t3-flash", "t3-gemini"):
+        tier = _resolve_tier(lower, effort, default_tier="high")
+        return ("antigravity", f"gemini-3.8-flash-{tier}")
+
+    # 10. Any other `t3-<model>` -> route to OpenCode
     if lower.startswith("t3-"):
         suffix = raw[3:].strip()
         return ("opencode", _normalize_opencode_slug(suffix))

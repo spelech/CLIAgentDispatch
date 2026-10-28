@@ -55,8 +55,24 @@ from cli_agent_dispatch.mcp.server import (
         ("t3-sonnet", None, None, ("opencode", "google-agy/claude-sonnet-5-5")),
         ("t3-agy-sonnet", None, None, ("opencode", "google-agy/claude-sonnet-5-5")),
         ("t3-gpt-oss", None, None, ("opencode", "google-agy/gpt-oss-120b-medium")),
-        ("t3-opencode", None, None, ("opencode", "google-agy/gemini-3.8-flash")),
-        ("t3-opencode-argon", None, None, ("opencode", "google-agy/gemini-4-argon")),
+        ("t3-opencode", None, None, ("opencode", "litellm/flash-latest")),
+        ("t3-opencode-flash", None, None, ("opencode", "litellm/flash-latest")),
+        ("t3-opencode-flash-lite", None, None, ("opencode", "litellm/flash-lite-latest")),
+        ("t3-vertex", None, None, ("opencode", "litellm/flash-latest")),
+        ("t3-vertex-flash", None, None, ("opencode", "litellm/flash-latest")),
+        ("t3-vertex-flash-lite", None, None, ("opencode", "litellm/flash-lite-latest")),
+        ("t3-openrouter", None, None, ("opencode", "litellm/deepseek-flash")),
+        ("t3-openrouter-deepseek", None, None, ("opencode", "litellm/deepseek-flash")),
+        ("t3-deepseek", None, None, ("opencode", "litellm/deepseek-flash")),
+        ("t3-deepseek-flash", None, None, ("opencode", "litellm/deepseek-flash")),
+        ("t3-deepseek-pro", None, None, ("opencode", "litellm/deepseek-pro")),
+        ("t3-glm", None, None, ("opencode", "litellm/glm")),
+        ("t3-glm-flash", None, None, ("opencode", "litellm/glm-flash")),
+        ("t3-qwen", None, None, ("opencode", "litellm/qwen-flash")),
+        ("t3-qwen-max", None, None, ("opencode", "litellm/qwen-max")),
+        ("t3-opencode-argon", None, None, ("opencode", "litellm/argon")),
+        ("t3-opencode-agy-flash", None, None, ("opencode", "google-agy/gemini-3.8-flash")),
+        ("t3-opencode-agy-argon", None, None, ("opencode", "google-agy/gemini-4-argon")),
         ("t3-opencode-glm", None, None, ("opencode", "litellm/glm")),
         ("t3-opencode-deepseek-pro", None, None, ("opencode", "litellm/deepseek-pro")),
         ("t3/antigravity/gemini-4-argon-high", None, None, ("antigravity", "gemini-4-argon-high")),
@@ -66,7 +82,7 @@ from cli_agent_dispatch.mcp.server import (
         ("t3-opencode/claude-opus-5-5", None, None, ("opencode", "google-agy/claude-opus-5-5")),
         ("openai/t3-agy-argon-high", None, None, ("antigravity", "gemini-4-argon-high")),
         ("glm", "opencode", None, ("opencode", "litellm/glm")),
-        ("gemini-3.8-flash-low", "opencode", None, ("opencode", "google-agy/gemini-3.8-flash")),
+        ("gemini-3.8-flash-low", "opencode", None, ("opencode", "litellm/flash-latest")),
     ],
 )
 def test_normalize_t3_model_selection(
@@ -81,10 +97,17 @@ def test_normalize_t3_model_selection(
 def test_discover_t3_models_and_route_resolvers() -> None:
     models = discover_t3_models()
     assert "t3" in models
+    assert "t3-vertex" in models
+    assert "t3-openrouter" in models
+    assert "t3-deepseek" in models
+    assert "t3-glm" in models
+    assert "t3-qwen" in models
     assert "t3-agy-flash" in models
     assert "t3-agy-argon" in models
     assert "t3-opencode-sonnet" in models
 
+    assert resolve_openai_model("t3-vertex") == (ExecutorType.T3, "t3-vertex")
+    assert resolve_openai_model("t3-openrouter") == (ExecutorType.T3, "t3-openrouter")
     assert resolve_openai_model("t3-agy-flash") == (ExecutorType.T3, "t3-agy-flash")
     assert resolve_openai_model("openai/t3-opencode-glm") == (ExecutorType.T3, "t3-opencode-glm")
     assert resolve_anthropic_model("t3-agy-opus") == (ExecutorType.T3, "t3-agy-opus")
