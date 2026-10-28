@@ -22,7 +22,7 @@ from cli_agent_dispatch.executors.agy import AgyExecutor
 from cli_agent_dispatch.executors.base import BaseExecutor
 from cli_agent_dispatch.executors.opencode import OpenCodeExecutor
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "settings",
