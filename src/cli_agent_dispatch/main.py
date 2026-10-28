@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -10,6 +11,8 @@ from cli_agent_dispatch.api.openai_routes import router as openai_router
 from cli_agent_dispatch.api.session_routes import router as session_router
 from cli_agent_dispatch.api.t3_pair_routes import router as t3_pair_router
 from cli_agent_dispatch.config import settings
+from cli_agent_dispatch.core.models import ExecutorType
+from cli_agent_dispatch.core.session_store import session_store
 from cli_agent_dispatch.infrastructure.taps import diagnostic_buffer
 from cli_agent_dispatch.mcp.server import mcp_server
 
@@ -20,11 +23,58 @@ logging.basicConfig(
 logger = logging.getLogger("CLIAgentDispatch")
 
 
+async def reap_expired_ephemeral_sessions(now: float | None = None) -> int:
+    """Perform a single pass of archiving expired ephemeral sessions."""
+    expired = await session_store.get_expired_ephemeral_sessions(now=now)
+    archived_count = 0
+    for rec in expired:
+        try:
+            thread_id = rec.native_session_id or rec.client_id
+            if rec.executor_type == ExecutorType.T3 and thread_id:
+                from cli_agent_dispatch.executors.t3 import T3McpClient
+
+                async with T3McpClient() as client:
+                    await client.call_tool(
+                        "t3_thread_organize",
+                        {"threadId": thread_id, "action": "archive"},
+                    )
+            await session_store.mark_archived(rec.client_id)
+            archived_count += 1
+            logger.info(f"Archived expired ephemeral session {rec.client_id} (thread: {thread_id})")
+        except Exception as exc:
+            logger.warning(
+                f"Failed to archive ephemeral session {rec.client_id}: {exc}",
+                exc_info=True,
+            )
+    return archived_count
+
+
+async def reap_expired_ephemeral_sessions_loop(interval_seconds: float = 1800) -> None:
+    """Background task running periodically during server lifespan to archive expired ephemeral sessions."""
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            await reap_expired_ephemeral_sessions()
+        except asyncio.CancelledError:
+            logger.info("Ephemeral session reaper task cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Unexpected error in ephemeral reaper loop: {e}", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} v{settings.app_version} on port {settings.port}")
-    yield
-    logger.info(f"Shutting down {settings.app_name}")
+    reaper_task = asyncio.create_task(reap_expired_ephemeral_sessions_loop())
+    try:
+        yield
+    finally:
+        reaper_task.cancel()
+        try:
+            await reaper_task
+        except asyncio.CancelledError:
+            pass
+        logger.info(f"Shutting down {settings.app_name}")
 
 
 app = FastAPI(

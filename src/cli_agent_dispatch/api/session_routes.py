@@ -5,6 +5,7 @@ import os
 import re
 import time
 import urllib.parse
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -152,6 +153,41 @@ async def cancel_session(session_id: str) -> dict[str, str | bool | list[str]]:
         "session_id": session_id,
         "cancelled": killed,
     }
+
+
+@router.post("/sessions/{session_id}/archive")
+async def archive_session(session_id: str) -> dict[str, Any]:
+    """Archives an active or ephemeral session and its underlying T3 thread if applicable."""
+    record = await session_store.get(session_id)
+    native_id = record.native_session_id if record else None
+    target_exec = record.executor_type if record else None
+
+    if not record:
+        if session_id.startswith("mcp:"):
+            native_id = session_id
+            target_exec = ExecutorType.T3
+        else:
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+
+    thread_id = native_id or session_id
+    if target_exec == ExecutorType.T3 and thread_id:
+        try:
+            from cli_agent_dispatch.executors.t3 import T3McpClient
+
+            async with T3McpClient() as client:
+                await client.call_tool(
+                    "t3_thread_organize",
+                    {"threadId": thread_id, "action": "archive"},
+                )
+        except Exception as e:
+            logger.error(f"Failed to archive T3 thread '{thread_id}': {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to archive T3 thread: {e}") from e
+
+    await session_store.mark_archived(session_id)
+    if native_id:
+        await session_store.mark_archived(native_id)
+
+    return {"status": "archived", "thread_id": thread_id}
 
 
 @router.post("/sessions/{session_id}/message", response_model=TaskResult)
