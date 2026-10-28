@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import time
@@ -288,8 +289,159 @@ def discover_t3_models() -> list[str]:
     return models
 
 
+SRE_REQUEST_HEADER = "=== SRE INCIDENT INVESTIGATION REQUEST ==="
+DIAGNOSTIC_ENVELOPE_HEADER = "DIAGNOSTIC ENVELOPE:"
+OPENCLAW_SRE_KEYWORD = "OpenClaw SRE"
+
+
+def is_sre_incident_prompt(prompt: str | None) -> bool:
+    """Check if the prompt represents an SRE incident investigation."""
+    if not prompt or not isinstance(prompt, str):
+        return False
+    if SRE_REQUEST_HEADER in prompt:
+        return True
+    prompt_upper = prompt.upper()
+    if SRE_REQUEST_HEADER.upper() in prompt_upper:
+        return True
+    has_diag = (
+        DIAGNOSTIC_ENVELOPE_HEADER in prompt
+        or DIAGNOSTIC_ENVELOPE_HEADER.upper() in prompt_upper
+    )
+    has_openclaw = (
+        OPENCLAW_SRE_KEYWORD in prompt
+        or OPENCLAW_SRE_KEYWORD.upper() in prompt_upper
+    )
+    return has_diag and has_openclaw
+
+
+def extract_sre_metadata(prompt: str | None) -> dict[str, str]:
+    """
+    Extract target (service/container), reason, and exit_code from an SRE prompt.
+    Returns dict with keys: 'target', 'reason', 'exit_code'.
+    """
+    p = prompt or ""
+    metadata: dict[str, str] = {
+        "target": "unknown",
+        "reason": "failure",
+        "exit_code": "unknown",
+    }
+
+    # Target extraction patterns
+    target_match = re.search(
+        r"(?:Target Service / Container|Target Service|Target|Container|target)\s*[:=]\s*([^\n\r,`]+)",
+        p,
+        re.IGNORECASE,
+    )
+    if target_match:
+        val = target_match.group(1).strip().strip("\"'")
+        if val:
+            metadata["target"] = val
+
+    # Exit code extraction patterns
+    exit_match = re.search(
+        r"(?:Exit Code / Status|Exit Code|Exit code|exit_code|exitcode|Exit Status)\s*[:=]\s*([^\n\r,`]+)",
+        p,
+        re.IGNORECASE,
+    )
+    status_hint = ""
+    if exit_match:
+        raw_exit = exit_match.group(1).strip().strip("\"'")
+        paren_match = re.search(r"(\S+)\s*\(([^)]+)\)", raw_exit)
+        if paren_match:
+            metadata["exit_code"] = paren_match.group(1).strip()
+            status_hint = paren_match.group(2).strip()
+        else:
+            metadata["exit_code"] = raw_exit
+
+    # Reason extraction patterns
+    reason_match = re.search(
+        r"(?:Failure Reason|Reason / Failure|Reason|reason|Failure|failure)\s*[:=]\s*([^\n\r,`]+)",
+        p,
+        re.IGNORECASE,
+    )
+    if reason_match:
+        val = reason_match.group(1).strip().strip("\"'")
+        if val:
+            metadata["reason"] = val
+    elif status_hint:
+        metadata["reason"] = status_hint
+
+    return metadata
+
+
+def build_sre_thread_title(metadata: dict[str, str]) -> str:
+    """Format semantic thread title: 🚨 [SRE] <target> (<reason> | exit <exit_code>)"""
+    target = metadata.get("target") or "unknown"
+    reason = metadata.get("reason") or "failure"
+    exit_code = metadata.get("exit_code") or "unknown"
+
+    title = f"🚨 [SRE] {target} ({reason} | exit {exit_code})"
+    if len(title) > TITLE_MAX_CHARS:
+        title = title[: TITLE_MAX_CHARS - 1].rstrip() + "…"
+    return title
+
+
+def sanitize_prompt_for_t3(prompt: str | None) -> str:
+    """
+    Sanitize an inbound SRE prompt for T3 execution:
+    - Strips OpenClaw system preamble (`System: <!-- openclaw:attempt:STABLE -->...`)
+    - Strips deferred tool schemas catalog (`## Tooling\nTools policy-filtered...`)
+    - Strips stacked `[OpenClaw heartbeat poll]` lines
+    - Strips internal context blocks (`<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>...<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`)
+    Retains only the incident envelope, application logs, and root cause/remediation output contract.
+    """
+    if not prompt:
+        return ""
+
+    cleaned = prompt
+
+    # 1. Strip OpenClaw system preamble
+    cleaned = re.sub(
+        r"(?:System:\s*)?<!--\s*openclaw:attempt:[^>]*-->.*?(?=(?:\n\s*## Tooling|\n\s*<<<BEGIN|\n\s*===|\n\s*DIAGNOSTIC|\Z))",
+        "",
+        cleaned,
+        flags=re.DOTALL,
+    )
+
+    # 2. Strip deferred tool schemas catalog
+    cleaned = re.sub(
+        r"## Tooling\s*\n\s*(?:Tools policy-filtered.*?)?(?=(?:\n\s*<<<BEGIN|\n\s*===|\n\s*DIAGNOSTIC|\Z))",
+        "",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"## Tooling[\s\S]*?(?=(?:\n\s*<<<BEGIN|\n\s*===|\n\s*DIAGNOSTIC|\Z))",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    # 3. Strip stacked heartbeat poll lines
+    cleaned = re.sub(r"^\s*\[OpenClaw heartbeat poll\].*$\n?", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(
+        r"^\s*Follow the heartbeat monitor scratch context.*$\n?",
+        "",
+        cleaned,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+
+    # 4. Strip internal context blocks
+    cleaned = re.sub(
+        r"<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\n?",
+        "",
+        cleaned,
+    )
+
+    # 5. Clean up excessive whitespace
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
 def _title_from_prompt(prompt: str) -> str:
     """Derive a clean, single-line thread title from an inbound prompt."""
+    if is_sre_incident_prompt(prompt):
+        return build_sre_thread_title(extract_sre_metadata(prompt))
     for raw_line in (prompt or "").splitlines():
         line = raw_line.strip()
         if not line:
@@ -907,6 +1059,9 @@ class T3Executor(BaseExecutor):
         else:
             prompt = request.prompt
 
+        if is_sre_incident_prompt(prompt):
+            prompt = sanitize_prompt_for_t3(prompt)
+
         mode = "normal"
         scope = "home"
         interaction_mode = "default"
@@ -917,6 +1072,33 @@ class T3Executor(BaseExecutor):
                 interaction_mode = "plan"
 
         return prompt, mode, scope, interaction_mode
+
+    async def launch_thread(
+        self,
+        client: T3McpClient,
+        project_id: str,
+        title: str,
+        message: str,
+        instance_id: str,
+        model_slug: str,
+        runtime_mode: str = "full-access",
+        interaction_mode: str = "default",
+    ) -> dict[str, Any]:
+        """Launch a new T3 Code thread, applying SRE title and prompt sanitization if applicable."""
+        if is_sre_incident_prompt(message):
+            metadata = extract_sre_metadata(message)
+            title = build_sre_thread_title(metadata)
+            message = sanitize_prompt_for_t3(message)
+
+        return await client.launch_thread(
+            project_id=project_id,
+            title=title,
+            message=message,
+            instance_id=instance_id,
+            model_slug=model_slug,
+            runtime_mode=runtime_mode,
+            interaction_mode=interaction_mode,
+        )
 
     async def _start_or_resume_run(
         self,
@@ -953,8 +1135,17 @@ class T3Executor(BaseExecutor):
                 logger.warning(f"Could not resume T3 thread {thread_id}, starting new thread: {e}")
 
         project_id = await client.resolve_or_create_project(workspace)
-        title = _title_from_prompt(request.prompt)
-        launched = await client.launch_thread(
+        if is_sre_incident_prompt(request.prompt) or is_sre_incident_prompt(prompt):
+            metadata = extract_sre_metadata(request.prompt)
+            if not metadata.get("target") or metadata.get("target") == "unknown":
+                metadata = extract_sre_metadata(prompt)
+            title = build_sre_thread_title(metadata)
+            prompt = sanitize_prompt_for_t3(prompt)
+        else:
+            title = _title_from_prompt(request.prompt)
+
+        launched = await self.launch_thread(
+            client=client,
             project_id=project_id,
             title=title,
             message=prompt,

@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -21,7 +22,11 @@ from cli_agent_dispatch.core.models import (
 )
 from cli_agent_dispatch.core.session_store import session_store
 from cli_agent_dispatch.executors.agy import discover_agy_models
-from cli_agent_dispatch.executors.t3 import T3_STATIC_ALIASES, discover_t3_models
+from cli_agent_dispatch.executors.t3 import (
+    T3_STATIC_ALIASES,
+    discover_t3_models,
+    is_sre_incident_prompt,
+)
 
 router = APIRouter(prefix="/v1", tags=["OpenAI Compatibility"])
 
@@ -142,6 +147,8 @@ async def _stream_chat_completion_sse(
     stream_gen: AsyncGenerator[StreamChunk, None],
     client_session_id: str | None,
     exec_type: ExecutorType,
+    ephemeral: bool = False,
+    expires_at: float | None = None,
 ) -> AsyncGenerator[str, None]:
     created = int(time.time())
 
@@ -151,6 +158,8 @@ async def _stream_chat_completion_sse(
                 client_id=client_session_id,
                 executor_type=exec_type,
                 native_session_id=chunk.session_id,
+                ephemeral=ephemeral,
+                expires_at=expires_at,
             )
 
         if chunk.reasoning_delta:
@@ -207,6 +216,18 @@ async def _stream_chat_completion_sse(
     yield "data: [DONE]\n\n"
 
 
+def is_heartbeat_turn(messages: list[ChatCompletionMessage]) -> bool:
+    """Check if any user message represents an OpenClaw background heartbeat poll turn."""
+    for msg in messages:
+        content = msg.content or ""
+        if (
+            "[OpenClaw heartbeat poll]" in content
+            or "Follow the heartbeat monitor scratch context" in content
+        ):
+            return True
+    return False
+
+
 @router.post("/chat/completions")
 async def create_chat_completion(
     request: ChatCompletionRequest,
@@ -214,7 +235,7 @@ async def create_chat_completion(
     x_session_id: str | None = Header(default=None),
     x_thread_id: str | None = Header(default=None),
 ):
-    """OpenAI-compatible chat completions endpoint delegating to OpenCode or agy."""
+    """OpenAI-compatible chat completions endpoint delegating to OpenCode, agy, or T3."""
     if not request.messages:
         raise HTTPException(status_code=400, detail="Messages array cannot be empty.")
 
@@ -232,6 +253,78 @@ async def create_chat_completion(
             exec_type = existing_session.executor_type
             is_resumed_turn = True
 
+    # Heartbeat bypass check: avoid heavy T3 thread initialization for background polls
+    if is_heartbeat_turn(request.messages):
+        if exec_type == ExecutorType.T3:
+            exec_type = ExecutorType.AGY
+            model_override = "gemini-3.8-flash-low"
+
+        fast_inference = os.environ.get("OPENCLAW_HEARTBEAT_FAST_INFERENCE") == "1"
+        if not fast_inference:
+            completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+            active_client_id = client_session_id or f"session_{uuid.uuid4().hex[:12]}"
+
+            if request.stream:
+                async def _stream_heartbeat_no_reply() -> AsyncGenerator[str, None]:
+                    created = int(time.time())
+                    chunk_payload = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": request.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": "NO_REPLY"},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    yield f"data: {json.dumps(chunk_payload)}\n\n"
+                    stop_payload = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": request.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                    }
+                    yield f"data: {json.dumps(stop_payload)}\n\n"
+                    yield "data: [DONE]\n\n"
+
+                resp = StreamingResponse(
+                    _stream_heartbeat_no_reply(),
+                    media_type="text/event-stream",
+                )
+                resp.headers["x-session-id"] = active_client_id
+                resp.headers["Cache-Control"] = "no-cache"
+                resp.headers["Connection"] = "keep-alive"
+                return resp
+
+            response.headers["x-session-id"] = active_client_id
+            return ChatCompletionResponse(
+                id=completion_id,
+                created=int(time.time()),
+                model=request.model,
+                choices=[
+                    ChatCompletionResponseChoice(
+                        index=0,
+                        message=ChatCompletionMessage(role="assistant", content="NO_REPLY"),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=ChatCompletionUsage(
+                    prompt_tokens=10,
+                    completion_tokens=2,
+                    total_tokens=12,
+                ),
+            )
+
     if is_resumed_turn:
         # Avoid quadratic history duplication by sending only the latest delta turn
         prompt_text = _extract_delta_turn(request.messages)
@@ -239,6 +332,11 @@ async def create_chat_completion(
     else:
         prompt_text = _format_prompt(request.messages)
         system_text = system_prompt
+
+    # Ephemeral session calculation for SRE incidents mapped to T3
+    is_sre = is_sre_incident_prompt(prompt_text) or is_sre_incident_prompt(system_text or "")
+    is_ephemeral = (exec_type == ExecutorType.T3 and is_sre)
+    expires_at = time.time() + 86400 if is_ephemeral else None
 
     task_req = TaskRequest(
         prompt=prompt_text,
@@ -261,6 +359,8 @@ async def create_chat_completion(
                 stream_gen=stream_gen,
                 client_session_id=active_client_id,
                 exec_type=exec_type,
+                ephemeral=is_ephemeral,
+                expires_at=expires_at,
             ),
             media_type="text/event-stream",
         )
@@ -283,6 +383,8 @@ async def create_chat_completion(
         client_id=active_client_id,
         executor_type=exec_type,
         native_session_id=resolved_native_id,
+        ephemeral=is_ephemeral,
+        expires_at=expires_at,
     )
 
     response.headers["x-session-id"] = active_client_id

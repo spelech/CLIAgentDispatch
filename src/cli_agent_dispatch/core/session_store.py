@@ -21,6 +21,11 @@ class SessionRecord(BaseModel):
     last_active_at: float = Field(default_factory=time.time)
     turn_count: int = Field(default=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    ephemeral: bool = Field(default=False, description="Whether this session is ephemeral/temporary.")
+    expires_at: float | None = Field(
+        default=None, description="Timestamp after which ephemeral session expires."
+    )
+    archived: bool = Field(default=False, description="Whether this session has been archived.")
 
     def touch(self) -> None:
         self.last_active_at = time.time()
@@ -126,6 +131,8 @@ class SessionStore:
         executor_type: ExecutorType,
         native_session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        ephemeral: bool = False,
+        expires_at: float | None = None,
     ) -> SessionRecord:
         """Retrieve existing session or create a new one."""
         async with self._lock:
@@ -137,6 +144,10 @@ class SessionStore:
                     record.native_session_id = native_session_id
                 if metadata:
                     record.metadata.update(metadata)
+                if ephemeral:
+                    record.ephemeral = True
+                if expires_at is not None:
+                    record.expires_at = expires_at
                 return record
 
             new_record = SessionRecord(
@@ -144,9 +155,36 @@ class SessionStore:
                 executor_type=executor_type,
                 native_session_id=native_session_id,
                 metadata=metadata or {},
+                ephemeral=ephemeral,
+                expires_at=expires_at,
             )
             self._sessions[client_id] = new_record
             return new_record
+
+    async def get_expired_ephemeral_sessions(
+        self, now: float | None = None
+    ) -> list[SessionRecord]:
+        """Return list of ephemeral sessions whose expiration time has passed and are not yet archived."""
+        current_time = now if now is not None else time.time()
+        async with self._lock:
+            return [
+                rec
+                for rec in self._sessions.values()
+                if rec.ephemeral
+                and not rec.archived
+                and rec.expires_at is not None
+                and rec.expires_at <= current_time
+            ]
+
+    async def mark_archived(self, client_id: str) -> None:
+        """Mark a session record as archived."""
+        async with self._lock:
+            record = self._sessions.get(client_id)
+            if record:
+                record.archived = True
+            for rec in self._sessions.values():
+                if rec.native_session_id == client_id:
+                    rec.archived = True
 
     async def update_native_id(self, client_id: str, native_session_id: str) -> None:
         """Update the underlying native executor session ID for a client ID."""
