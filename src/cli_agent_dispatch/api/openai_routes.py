@@ -228,6 +228,19 @@ def is_heartbeat_turn(messages: list[ChatCompletionMessage]) -> bool:
     return False
 
 
+def is_background_cron_turn(messages: list[ChatCompletionMessage]) -> bool:
+    """Check if any message represents an OpenClaw background cron/dream/skill-review turn."""
+    for msg in messages:
+        content = msg.content or ""
+        if (
+            "__openclaw_memory_core_" in content
+            or "Review this agent's Skill Workshop as a collection" in content
+            or "[managed-by=memory-core." in content
+        ):
+            return True
+    return False
+
+
 @router.post("/chat/completions")
 async def create_chat_completion(
     request: ChatCompletionRequest,
@@ -334,9 +347,14 @@ async def create_chat_completion(
         prompt_text = _format_prompt(request.messages)
         system_text = system_prompt
 
-    # Ephemeral session calculation for SRE incidents mapped to T3
+    # SRE and background cron bypass check: never spawn T3 threads for SRE incidents or background maintenance
     is_sre = is_sre_incident_prompt(prompt_text) or is_sre_incident_prompt(system_text or "")
-    is_ephemeral = exec_type == ExecutorType.T3 and is_sre
+    is_bg_cron = is_background_cron_turn(request.messages)
+    if exec_type == ExecutorType.T3 and (is_sre or is_bg_cron):
+        exec_type = ExecutorType.AGY
+        model_override = "gemini-3.8-flash-low"
+
+    is_ephemeral = is_sre or is_bg_cron
     expires_at = time.time() + 86400 if is_ephemeral else None
 
     task_req = TaskRequest(

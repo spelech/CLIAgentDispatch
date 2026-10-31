@@ -16,6 +16,7 @@ from cli_agent_dispatch.config import settings
 from cli_agent_dispatch.core.engine import engine
 from cli_agent_dispatch.core.models import ExecutorType, InvestigationRequest, TaskRequest
 from cli_agent_dispatch.core.session_store import session_store
+from cli_agent_dispatch.executors.t3 import is_sre_incident_prompt
 
 logger = logging.getLogger("CLIAgentDispatch.MCP")
 
@@ -51,10 +52,10 @@ async def delegate_task_tool(
         The raw agent execution output, diffs, or error diagnostics.
     """
     exec_lower = executor.lower()
-    if exec_lower == "t3":
-        exec_type = ExecutorType.T3
-    elif exec_lower == "opencode":
+    if exec_lower == "opencode":
         exec_type = ExecutorType.OPENCODE
+    elif exec_lower == "t3" and not is_sre_incident_prompt(prompt):
+        exec_type = ExecutorType.T3
     else:
         exec_type = ExecutorType.AGY
     req = TaskRequest(
@@ -101,9 +102,7 @@ async def investigate_incident_tool(
         Structured JSON resolution including root cause, proposed fix, and turns used.
     """
     exec_lower = executor.lower()
-    if exec_lower == "t3":
-        exec_type = ExecutorType.T3
-    elif exec_lower == "opencode":
+    if exec_lower == "opencode":
         exec_type = ExecutorType.OPENCODE
     else:
         exec_type = ExecutorType.AGY
