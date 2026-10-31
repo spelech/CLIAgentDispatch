@@ -163,9 +163,10 @@ Exit Code / Status: 137 (OOMKilled)
             )
             assert resp.status_code == 200
 
-            # Session should be registered as ephemeral in session_store with expires_at ~ now + 86400
+            # Session should be downgraded from T3 to AGY and registered as ephemeral in session_store
             record = await session_store.get("client_sre_turn_1")
             assert record is not None
+            assert record.executor_type == ExecutorType.AGY
             assert record.ephemeral is True
             assert record.expires_at is not None
             assert record.expires_at > time.time() + 86000
