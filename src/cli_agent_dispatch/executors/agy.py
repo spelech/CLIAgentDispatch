@@ -19,9 +19,20 @@ from cli_agent_dispatch.executors.base import BaseExecutor
 logger = logging.getLogger("CLIAgentDispatch.AgyExecutor")
 
 DEFAULT_AGY_MODELS: dict[str, str] = {
+    "gemini-4-neon-low": "Gemini 4 Neon (Low)",
+    "gemini-4-neon-medium": "Gemini 4 Neon (Medium)",
+    "gemini-4-neon-high": "Gemini 4 Neon (High)",
+    "gemini-4-neon-xhigh": "Gemini 4 Neon (XHigh)",
+    "gemini-4-carbon-low": "Gemini 4 Carbon (Low)",
+    "gemini-4-carbon-medium": "Gemini 4 Carbon (Medium)",
+    "gemini-4-carbon-high": "Gemini 4 Carbon (High)",
     "gemini-4-argon-low": "Gemini 4 Argon (Low)",
     "gemini-4-argon-medium": "Gemini 4 Argon (Medium)",
     "gemini-4-argon-high": "Gemini 4 Argon (High)",
+    "gemini-4-hydrogen-low": "Gemini 4 Hydrogen (Low)",
+    "gemini-4-hydrogen-medium": "Gemini 4 Hydrogen (Medium)",
+    "gemini-4-hydrogen-high": "Gemini 4 Hydrogen (High)",
+    "gemini-4-hydrogen-xhigh": "Gemini 4 Hydrogen (XHigh)",
     "gemini-3.8-flash-low": "Gemini 3.8 Flash (Low)",
     "gemini-3.8-flash-medium": "Gemini 3.8 Flash (Medium)",
     "gemini-3.8-flash-high": "Gemini 3.8 Flash (High)",
@@ -160,6 +171,31 @@ def normalize_agy_model(model: str | None) -> str:
     for model_id, display_name in discovered.items():
         if m == model_id.lower() or m == display_name.lower():
             return display_name
+
+    if "neon" in m:
+        if "xhigh" in m or "max" in m:
+            return "Gemini 4 Neon (XHigh)"
+        if "high" in m:
+            return "Gemini 4 Neon (High)"
+        if "low" in m:
+            return "Gemini 4 Neon (Low)"
+        return "Gemini 4 Neon (Medium)"
+
+    if "carbon" in m:
+        if "high" in m or "max" in m:
+            return "Gemini 4 Carbon (High)"
+        if "low" in m:
+            return "Gemini 4 Carbon (Low)"
+        return "Gemini 4 Carbon (Medium)"
+
+    if "hydrogen" in m:
+        if "xhigh" in m or "max" in m:
+            return "Gemini 4 Hydrogen (XHigh)"
+        if "high" in m:
+            return "Gemini 4 Hydrogen (High)"
+        if "low" in m:
+            return "Gemini 4 Hydrogen (Low)"
+        return "Gemini 4 Hydrogen (Medium)"
 
     if "argon" in m:
         if "high" in m or "max" in m:
@@ -482,6 +518,7 @@ class SlackActivityTracker:
         prompt: str,
         enabled: bool = True,
         t3_ui_url: str | None = None,
+        handoff_session_id: str | None = None,
     ):
         self.run_id = run_id
         self.model = model
@@ -491,6 +528,7 @@ class SlackActivityTracker:
         self.token = _resolve_slack_bot_token() if enabled else None
         self.enabled = bool(enabled and self.token and self.channel)
         self.t3_ui_url = t3_ui_url
+        self.handoff_session_id = handoff_session_id or run_id
         self.message_ts: str | None = None
         self.steps: dict[Any, dict[str, Any]] = {}
         self.step_order: list[Any] = []
@@ -570,6 +608,15 @@ class SlackActivityTracker:
                     "text": {"type": "plain_text", "text": "🧵 Hijack in T3 Code", "emoji": True},
                     "url": self.t3_ui_url,
                     "action_id": "open_t3_ui",
+                }
+            )
+        elif self.handoff_session_id:
+            action_elements.append(
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "🧵 Hand off to T3", "emoji": True},
+                    "action_id": "escalate_to_t3",
+                    "value": self.handoff_session_id,
                 }
             )
         action_elements.append(
@@ -898,6 +945,7 @@ class AgyExecutor(BaseExecutor):
             cmd.extend(["--output-format", "stream-json", "--print", prompt])
 
         run_id = request.session_id or f"run_{uuid.uuid4().hex[:10]}"
+        handoff_key = request.client_session_id or run_id
         tracker = SlackActivityTracker(
             run_id=run_id,
             model=model,
@@ -905,6 +953,7 @@ class AgyExecutor(BaseExecutor):
             scope=scope,
             prompt=prompt,
             enabled=is_interactive_slack_turn(prompt),
+            handoff_session_id=handoff_key,
         )
 
         env = _build_agy_subprocess_env(workspace)
@@ -921,6 +970,8 @@ class AgyExecutor(BaseExecutor):
                 stderr=asyncio.subprocess.PIPE,
             )
             session_store.register_process(run_id, process)
+            if handoff_key != run_id:
+                session_store.register_process(handoff_key, process)
             if use_stdin and process.stdin is not None:
                 payload_line = (
                     json.dumps({"event": "user", "message": {"content": prompt}}) + "\n"
@@ -964,6 +1015,7 @@ class AgyExecutor(BaseExecutor):
                                 formatted_tool = format_agy_tool_step(step_obj)
                                 if formatted_tool is not None:
                                     reasoning_line, card_step = formatted_tool
+                                    session_store.record_step_snapshot(handoff_key, card_step)
                                     await tracker.record_step(card_step)
                                     yield StreamChunk(
                                         delta="",
@@ -1079,10 +1131,14 @@ class AgyExecutor(BaseExecutor):
             )
         finally:
             session_store.unregister_process(run_id)
+            if handoff_key != run_id:
+                session_store.unregister_process(handoff_key)
             if session_id:
                 session_store.unregister_process(session_id)
-            if session_store.was_cancelled(run_id) or (
-                session_id and session_store.was_cancelled(session_id)
+            if (
+                session_store.was_cancelled(run_id)
+                or session_store.was_cancelled(handoff_key)
+                or (session_id and session_store.was_cancelled(session_id))
             ):
                 stream_status = "aborted"
             await tracker.finalize(status=stream_status)

@@ -45,7 +45,7 @@ async def delegate_task_tool(
         workspace: Absolute path to target repository/directory (defaults to /containers).
         model: Model override (e.g. 'gemini-4-argon', 'gemini-3.8-flash', 'claude-sonnet-5.5', 'gpt-oss-120b', or 'opencode-default').
         effort: Optional reasoning effort ('low', 'medium', 'high', 'xhigh', 'max').
-        timeout: Execution timeout in seconds (default: 180).
+        timeout: Execution timeout in seconds (default: 900).
         session_id: Optional session identifier for continuous multi-turn thread persistence.
 
     Returns:

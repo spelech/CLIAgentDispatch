@@ -1,4 +1,7 @@
 import asyncio
+import json
+import os
+import sqlite3
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -37,13 +40,127 @@ class SessionRecord(BaseModel):
 class SessionStore:
     """Thread-safe, in-memory session registry with TTL management."""
 
-    def __init__(self, default_ttl_seconds: int = 86400):
+    def __init__(self, default_ttl_seconds: int = 86400, db_path: str | None = None):
         self.default_ttl = default_ttl_seconds
         self._sessions: dict[str, SessionRecord] = {}
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._cancel_callbacks: dict[str, Callable[[], Awaitable[bool]]] = {}
         self._cancelled_runs: set[str] = set()
         self._lock = asyncio.Lock()
+        self._db_path: str | None = None
+        if db_path:
+            self.attach_db(db_path)
+
+    def attach_db(self, db_path: str) -> None:
+        """Attach a SQLite database file and load unexpired sessions into memory."""
+        self._db_path = db_path
+        parent = os.path.dirname(os.path.abspath(db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    client_id TEXT PRIMARY KEY,
+                    executor_type TEXT NOT NULL,
+                    native_session_id TEXT,
+                    created_at REAL NOT NULL,
+                    last_active_at REAL NOT NULL,
+                    turn_count INTEGER NOT NULL DEFAULT 0,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    ephemeral INTEGER NOT NULL DEFAULT 0,
+                    expires_at REAL,
+                    archived INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            now = time.time()
+            rows = conn.execute(
+                "SELECT client_id, executor_type, native_session_id, created_at, last_active_at, "
+                "turn_count, metadata_json, ephemeral, expires_at, archived FROM sessions"
+            ).fetchall()
+            expired_ids: list[str] = []
+            for row in rows:
+                (
+                    cid,
+                    exec_val,
+                    native_id,
+                    created_at,
+                    last_active_at,
+                    turn_count,
+                    metadata_json,
+                    ephemeral,
+                    expires_at,
+                    archived,
+                ) = row
+                if now - last_active_at > self.default_ttl:
+                    expired_ids.append(cid)
+                    continue
+                try:
+                    meta = json.loads(metadata_json) if metadata_json else {}
+                except Exception:
+                    meta = {}
+                self._sessions[cid] = SessionRecord(
+                    client_id=cid,
+                    executor_type=ExecutorType(exec_val),
+                    native_session_id=native_id,
+                    created_at=created_at,
+                    last_active_at=last_active_at,
+                    turn_count=turn_count,
+                    metadata=meta,
+                    ephemeral=bool(ephemeral),
+                    expires_at=expires_at,
+                    archived=bool(archived),
+                )
+            if expired_ids:
+                conn.executemany(
+                    "DELETE FROM sessions WHERE client_id = ?", [(cid,) for cid in expired_ids]
+                )
+            conn.commit()
+
+    def _persist_record(self, rec: SessionRecord) -> None:
+        if not self._db_path:
+            return
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO sessions (
+                    client_id, executor_type, native_session_id, created_at, last_active_at,
+                    turn_count, metadata_json, ephemeral, expires_at, archived
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    executor_type = excluded.executor_type,
+                    native_session_id = excluded.native_session_id,
+                    last_active_at = excluded.last_active_at,
+                    turn_count = excluded.turn_count,
+                    metadata_json = excluded.metadata_json,
+                    ephemeral = excluded.ephemeral,
+                    expires_at = excluded.expires_at,
+                    archived = excluded.archived
+                """,
+                (
+                    rec.client_id,
+                    rec.executor_type.value,
+                    rec.native_session_id,
+                    rec.created_at,
+                    rec.last_active_at,
+                    rec.turn_count,
+                    json.dumps(rec.metadata),
+                    1 if rec.ephemeral else 0,
+                    rec.expires_at,
+                    1 if rec.archived else 0,
+                ),
+            )
+            conn.commit()
+
+    def _delete_from_db(self, client_ids: list[str]) -> None:
+        if not self._db_path or not client_ids:
+            return
+        with sqlite3.connect(self._db_path) as conn:
+            conn.executemany(
+                "DELETE FROM sessions WHERE client_id = ?", [(cid,) for cid in client_ids]
+            )
+            conn.commit()
 
     def register_process(self, client_id: str, proc: asyncio.subprocess.Process) -> None:
         """Register a running OS subprocess associated with a session or run ID."""
@@ -123,8 +240,10 @@ class SessionStore:
                 return None
             if time.time() - record.last_active_at > self.default_ttl:
                 del self._sessions[client_id]
+                self._delete_from_db([client_id])
                 return None
             record.touch()
+            self._persist_record(record)
             return record
 
     async def get_or_create(
@@ -150,6 +269,7 @@ class SessionStore:
                     record.ephemeral = True
                 if expires_at is not None:
                     record.expires_at = expires_at
+                self._persist_record(record)
                 return record
 
             new_record = SessionRecord(
@@ -161,6 +281,7 @@ class SessionStore:
                 expires_at=expires_at,
             )
             self._sessions[client_id] = new_record
+            self._persist_record(new_record)
             return new_record
 
     async def get_expired_ephemeral_sessions(self, now: float | None = None) -> list[SessionRecord]:
@@ -182,9 +303,11 @@ class SessionStore:
             record = self._sessions.get(client_id)
             if record:
                 record.archived = True
+                self._persist_record(record)
             for rec in self._sessions.values():
                 if rec.native_session_id == client_id:
                     rec.archived = True
+                    self._persist_record(rec)
 
     async def update_native_id(self, client_id: str, native_session_id: str) -> None:
         """Update the underlying native executor session ID for a client ID."""
@@ -192,11 +315,94 @@ class SessionStore:
             if client_id in self._sessions:
                 self._sessions[client_id].native_session_id = native_session_id
                 self._sessions[client_id].touch()
+                self._persist_record(self._sessions[client_id])
+
+    async def get_by_any_id(self, session_id: str) -> SessionRecord | None:
+        """Look up an unexpired session by client_id or native_session_id."""
+        async with self._lock:
+            now = time.time()
+            rec = self._sessions.get(session_id)
+            if rec and (now - rec.last_active_at <= self.default_ttl):
+                return rec
+            for candidate in self._sessions.values():
+                if candidate.native_session_id == session_id and (
+                    now - candidate.last_active_at <= self.default_ttl
+                ):
+                    return candidate
+            return None
+
+    async def update_metadata(self, client_id: str, updates: dict[str, Any]) -> None:
+        """Merge metadata fields into an existing session record."""
+        async with self._lock:
+            rec = self._sessions.get(client_id)
+            if rec:
+                rec.metadata.update(updates)
+                rec.last_active_at = time.time()
+                self._persist_record(rec)
+
+    def record_step_snapshot(self, client_id: str, step: dict[str, Any]) -> None:
+        """Record a recent tool step in memory on the session record for T3 handoff context."""
+        rec = self._sessions.get(client_id)
+        if not rec:
+            for candidate in self._sessions.values():
+                if candidate.native_session_id == client_id:
+                    rec = candidate
+                    break
+        if not rec:
+            return
+        steps = rec.metadata.setdefault("recent_steps", [])
+        if not isinstance(steps, list):
+            steps = []
+            rec.metadata["recent_steps"] = steps
+        step_idx = step.get("step_index")
+        for i, existing in enumerate(steps):
+            if (
+                isinstance(existing, dict)
+                and step_idx is not None
+                and existing.get("step_index") == step_idx
+            ):
+                steps[i] = dict(step)
+                return
+        steps.append(dict(step))
+        if len(steps) > 20:
+            del steps[:-20]
+
+    async def upgrade_executor(
+        self,
+        client_id: str,
+        executor_type: ExecutorType,
+        native_session_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRecord:
+        """Upgrade/bind an existing or new session record to a new executor and native session ID."""
+        async with self._lock:
+            rec = self._sessions.get(client_id)
+            if rec:
+                rec.executor_type = executor_type
+                rec.native_session_id = native_session_id
+                rec.archived = False
+                if metadata:
+                    rec.metadata.update(metadata)
+                rec.touch()
+                self._persist_record(rec)
+                return rec
+            new_rec = SessionRecord(
+                client_id=client_id,
+                executor_type=executor_type,
+                native_session_id=native_session_id,
+                metadata=metadata or {},
+            )
+            self._sessions[client_id] = new_rec
+            self._persist_record(new_rec)
+            return new_rec
 
     async def delete(self, client_id: str) -> bool:
         """Remove a session from the store."""
         async with self._lock:
-            return bool(self._sessions.pop(client_id, None))
+            existed = bool(self._sessions.pop(client_id, None))
+            if existed:
+                self._delete_from_db([client_id])
+            return existed
 
     async def prune_expired(self) -> int:
         """Remove all expired sessions according to default_ttl."""
@@ -207,6 +413,7 @@ class SessionStore:
             ]
             for k in expired_keys:
                 del self._sessions[k]
+            self._delete_from_db(expired_keys)
             return len(expired_keys)
 
     async def list_all(self) -> list[SessionRecord]:

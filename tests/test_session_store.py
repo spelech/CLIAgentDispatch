@@ -77,3 +77,21 @@ async def test_session_store_delete():
     await store.get_or_create("del-me", ExecutorType.AGY)
     assert await store.delete("del-me") is True
     assert await store.delete("nonexistent") is False
+
+
+@pytest.mark.asyncio
+async def test_session_store_sqlite_persistence_across_reloads(tmp_path):
+    db_file = str(tmp_path / "sessions.db")
+    store1 = SessionStore(default_ttl_seconds=60, db_path=db_file)
+    await store1.get_or_create(
+        client_id="slack-thread-uuid",
+        executor_type=ExecutorType.T3,
+        native_session_id="t3-thread-999",
+    )
+
+    store2 = SessionStore(default_ttl_seconds=60, db_path=db_file)
+    loaded = await store2.get("slack-thread-uuid")
+    assert loaded is not None
+    assert loaded.executor_type == ExecutorType.T3
+    assert loaded.native_session_id == "t3-thread-999"
+    assert loaded.turn_count == 1

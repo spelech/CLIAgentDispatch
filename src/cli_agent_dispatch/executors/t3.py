@@ -57,6 +57,20 @@ T3_STATIC_ALIASES: list[str] = [
     "t3-agy-argon-low",
     "t3-agy-argon-medium",
     "t3-agy-argon-high",
+    "t3-agy-neon",
+    "t3-agy-neon-low",
+    "t3-agy-neon-medium",
+    "t3-agy-neon-high",
+    "t3-agy-neon-xhigh",
+    "t3-agy-carbon",
+    "t3-agy-carbon-low",
+    "t3-agy-carbon-medium",
+    "t3-agy-carbon-high",
+    "t3-agy-hydrogen",
+    "t3-agy-hydrogen-low",
+    "t3-agy-hydrogen-medium",
+    "t3-agy-hydrogen-high",
+    "t3-agy-hydrogen-xhigh",
     "t3-agy-opus",
     "t3-agy-sonnet",
     "t3-opencode",
@@ -173,18 +187,34 @@ def _normalize_opencode_slug(raw_slug: str) -> str:
     return f"litellm/{slug}"
 
 
+_ANTIGRAVITY_XHIGH_MODELS: set[str] = {
+    "gemini-4-neon",
+    "gemini-4-hydrogen",
+}
+
+_ANTIGRAVITY_KEEP_SUFFIX_MODELS: set[str] = {
+    "gpt-oss-120b-medium",
+}
+
+
 def _resolve_tier(
     model_lower: str,
     explicit_effort: str | None,
     default_tier: str = "high",
+    *,
+    allow_xhigh: bool = False,
 ) -> str:
     eff = resolve_agy_effort(model_lower, explicit_effort)
-    if eff in ("high", "xhigh", "max"):
+    if eff in ("xhigh", "max"):
+        return "xhigh" if allow_xhigh else "high"
+    if eff == "high":
         return "high"
     if eff == "low":
         return "low"
     if eff == "medium":
         return "medium"
+    if model_lower.endswith("-xhigh") or "-xhigh-" in model_lower:
+        return "xhigh" if allow_xhigh else "high"
     if model_lower.endswith("-low") or "-low-" in model_lower:
         return "low"
     if model_lower.endswith("-medium") or "-medium-" in model_lower:
@@ -194,17 +224,64 @@ def _resolve_tier(
     return default_tier
 
 
-def normalize_t3_model_selection(
+def _normalize_antigravity_slug_and_options(
+    raw_slug: str,
+    explicit_effort: str | None = None,
+    default_tier: str | None = None,
+) -> tuple[str, dict[str, str] | None]:
+    """
+    Normalize an Antigravity ACP model slug to the bare slug advertised by T3 Code
+    (e.g. `gemini-3.8-flash-high` -> `gemini-3.8-flash` + `{"thought_level": "high"}`).
+    """
+    slug = raw_slug.strip() or "gemini-3.8-flash"
+    lower = slug.lower()
+
+    if lower in _ANTIGRAVITY_KEEP_SUFFIX_MODELS:
+        if explicit_effort:
+            tier = _resolve_tier("", explicit_effort, default_tier="medium", allow_xhigh=False)
+            return (lower, {"thought_level": tier})
+        return (lower, None)
+
+    extracted_tier: str | None = None
+    base_slug = slug
+    for suffix, mapped_tier in (
+        ("-xhigh", "xhigh"),
+        ("-max", "xhigh"),
+        ("-high", "high"),
+        ("-medium", "medium"),
+        ("-low", "low"),
+    ):
+        if lower.endswith(suffix):
+            base_slug = slug[: -len(suffix)]
+            extracted_tier = mapped_tier
+            break
+
+    allow_xhigh = base_slug.lower() in _ANTIGRAVITY_XHIGH_MODELS
+    if explicit_effort:
+        tier = _resolve_tier("", explicit_effort, default_tier="high", allow_xhigh=allow_xhigh)
+        return (base_slug, {"thought_level": tier})
+    if extracted_tier is not None:
+        tier = "high" if (extracted_tier == "xhigh" and not allow_xhigh) else extracted_tier
+        return (base_slug, {"thought_level": tier})
+    if default_tier is not None:
+        tier = "high" if (default_tier == "xhigh" and not allow_xhigh) else default_tier
+        return (base_slug, {"thought_level": tier})
+    return (base_slug, None)
+
+
+def resolve_t3_model_selection(
     model: str | None = None,
     provider: str | None = None,
     effort: str | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, str] | None]:
     """
     Normalize a requested model and optional provider/effort into a T3 Code
-    `(instance_id, model_slug)` tuple.
+    `(instance_id, model_slug, model_options)` tuple.
 
     Supported `instance_id`s:
-      - `"antigravity"`: Antigravity ACP (`gemini-3.8-flash-{low,medium,high}`, `gemini-4-argon-{low,medium,high}`)
+      - `"antigravity"`: Antigravity ACP bare slugs (`gemini-3.8-flash`, `gemini-4-argon`,
+        `gemini-4-neon`, `gemini-4-carbon`, `gemini-4-hydrogen`, etc.) with
+        `options={"thought_level": ...}`
       - `"opencode"`: OpenCode v2 (`google-agy/*` and `litellm/*`)
     """
     explicit_prov = (provider or "").strip().lower()
@@ -222,9 +299,9 @@ def normalize_t3_model_selection(
 
     if not raw:
         if explicit_prov == "opencode":
-            return ("opencode", "litellm/flash-latest")
-        tier = _resolve_tier("", effort, default_tier="high")
-        return ("antigravity", f"gemini-3.8-flash-{tier}")
+            return ("opencode", "litellm/flash-latest", None)
+        tier = _resolve_tier("", effort, default_tier="medium", allow_xhigh=True)
+        return ("antigravity", "gemini-4-hydrogen", {"thought_level": tier})
 
     lower = raw.lower()
 
@@ -235,39 +312,52 @@ def normalize_t3_model_selection(
             inst = parts[1].strip().lower()
             sub_model = parts[2].strip()
             if inst in ("opencode",):
-                return ("opencode", _normalize_opencode_slug(sub_model))
-            return ("antigravity", sub_model or "gemini-3.8-flash-high")
+                return ("opencode", _normalize_opencode_slug(sub_model), None)
+            slug, opts = _normalize_antigravity_slug_and_options(
+                sub_model or "gemini-3.8-flash",
+                explicit_effort=effort,
+                default_tier="high" if not sub_model else None,
+            )
+            return ("antigravity", slug, opts)
 
     if lower.startswith("t3-acp/"):
         sub_model = raw.split("/", 1)[1].strip()
-        return ("antigravity", sub_model or "gemini-3.8-flash-high")
+        slug, opts = _normalize_antigravity_slug_and_options(
+            sub_model or "gemini-3.8-flash",
+            explicit_effort=effort,
+            default_tier="high" if not sub_model else None,
+        )
+        return ("antigravity", slug, opts)
 
     if lower.startswith("t3-opencode/"):
         sub_model = raw.split("/", 1)[1].strip()
-        return ("opencode", _normalize_opencode_slug(sub_model))
+        return ("opencode", _normalize_opencode_slug(sub_model), None)
 
     # 2. Direct OpenCode prefixes: google-agy/* or litellm/*
     if lower.startswith("google-agy/") or lower.startswith("litellm/"):
-        return ("opencode", raw)
+        return ("opencode", raw, None)
 
-    # 3. Direct Antigravity ACP model slugs
-    if lower in (
-        "gemini-3.8-flash-low",
-        "gemini-3.8-flash-medium",
-        "gemini-3.8-flash-high",
-        "gemini-4-argon-low",
-        "gemini-4-argon-medium",
-        "gemini-4-argon-high",
+    # 3. Direct Antigravity ACP model slugs (bare or legacy tier-suffixed)
+    if lower.startswith(
+        (
+            "gemini-3.8-flash",
+            "gemini-4-argon",
+            "gemini-4-neon",
+            "gemini-4-carbon",
+            "gemini-4-hydrogen",
+            "gemini-pro-orchestrator",
+        )
     ):
         if explicit_prov == "opencode":
-            return ("opencode", _normalize_opencode_slug(lower))
-        return ("antigravity", lower)
+            return ("opencode", _normalize_opencode_slug(lower), None)
+        slug, opts = _normalize_antigravity_slug_and_options(raw, explicit_effort=effort)
+        return ("antigravity", slug, opts)
 
     # 4. Explicit `t3-vertex*` / `t3-openrouter*` / `t3-opencode*` / `t3-deepseek*` aliases
     if lower in ("t3-vertex", "t3-vertex-flash"):
-        return ("opencode", "litellm/flash-latest")
+        return ("opencode", "litellm/flash-latest", None)
     if lower in ("t3-vertex-flash-lite", "t3-opencode-flash-lite"):
-        return ("opencode", "litellm/flash-lite-latest")
+        return ("opencode", "litellm/flash-lite-latest", None)
     if lower in (
         "t3-openrouter",
         "t3-openrouter-deepseek",
@@ -275,62 +365,93 @@ def normalize_t3_model_selection(
         "t3-deepseek-flash",
         "t3-opencode-deepseek-flash",
     ):
-        return ("opencode", "litellm/deepseek-flash")
+        return ("opencode", "litellm/deepseek-flash", None)
     if lower in ("t3-deepseek-pro", "t3-opencode-deepseek-pro"):
-        return ("opencode", "litellm/deepseek-pro")
+        return ("opencode", "litellm/deepseek-pro", None)
     if lower in ("t3-glm", "t3-opencode-glm"):
-        return ("opencode", "litellm/glm")
+        return ("opencode", "litellm/glm", None)
     if lower in ("t3-glm-flash", "t3-opencode-glm-flash"):
-        return ("opencode", "litellm/glm-flash")
+        return ("opencode", "litellm/glm-flash", None)
     if lower in ("t3-qwen", "t3-qwen-flash", "t3-opencode-qwen-flash"):
-        return ("opencode", "litellm/qwen-flash")
+        return ("opencode", "litellm/qwen-flash", None)
     if lower in ("t3-qwen-max", "t3-opencode-qwen-max"):
-        return ("opencode", "litellm/qwen-max")
+        return ("opencode", "litellm/qwen-max", None)
     if lower in (
         "t3-opencode",
         "t3-opencode-default",
         "t3-opencode-flash",
         "t3-flash-latest",
     ):
-        return ("opencode", "litellm/flash-latest")
+        return ("opencode", "litellm/flash-latest", None)
     if lower.startswith("t3-opencode-"):
         suffix = raw[len("t3-opencode-") :].strip()
-        return ("opencode", _normalize_opencode_slug(suffix))
+        return ("opencode", _normalize_opencode_slug(suffix), None)
 
     # 5. Claude / GPT-OSS aliases -> route via OpenCode's google-agy plugin inside T3
     if "opus" in lower:
-        return ("opencode", "google-agy/claude-opus-5-5")
+        return ("opencode", "google-agy/claude-opus-5-5", None)
     if "sonnet" in lower or "claude" in lower:
-        return ("opencode", "google-agy/claude-sonnet-5-5")
+        return ("opencode", "google-agy/claude-sonnet-5-5", None)
     if "gpt-oss" in lower or "oss-120b" in lower:
-        return ("opencode", "google-agy/gpt-oss-120b-medium")
+        return ("opencode", "google-agy/gpt-oss-120b-medium", None)
 
     # 6. Explicit provider="opencode"
     if explicit_prov == "opencode":
         cleaned = raw[3:].lstrip("-_") if lower.startswith("t3") else raw
-        return ("opencode", _normalize_opencode_slug(cleaned or "default"))
+        return ("opencode", _normalize_opencode_slug(cleaned or "default"), None)
 
-    # 7. Argon aliases -> Antigravity ACP
+    # 7. Gemini 4 family aliases -> Antigravity ACP
+    if "neon" in lower:
+        tier = _resolve_tier(lower, effort, default_tier="high", allow_xhigh=True)
+        return ("antigravity", "gemini-4-neon", {"thought_level": tier})
+    if "carbon" in lower:
+        tier = _resolve_tier(lower, effort, default_tier="medium")
+        return ("antigravity", "gemini-4-carbon", {"thought_level": tier})
+    if "hydrogen" in lower:
+        tier = _resolve_tier(lower, effort, default_tier="medium", allow_xhigh=True)
+        return ("antigravity", "gemini-4-hydrogen", {"thought_level": tier})
     if "argon" in lower:
         tier = _resolve_tier(lower, effort, default_tier="medium")
-        return ("antigravity", f"gemini-4-argon-{tier}")
+        return ("antigravity", "gemini-4-argon", {"thought_level": tier})
 
     # 8. Explicit `t3-agy*` aliases
     if lower.startswith("t3-agy"):
         tier = _resolve_tier(lower, effort, default_tier="high")
-        return ("antigravity", f"gemini-3.8-flash-{tier}")
+        return ("antigravity", "gemini-3.8-flash", {"thought_level": tier})
 
-    # 9. Default `t3` or `t3-flash`
-    if lower in ("t3", "t3-default", "t3-flash", "t3-gemini"):
+    # 9. Default `t3` -> Gemini 4 Hydrogen (Medium); explicit `t3-flash` / `t3-gemini` -> Flash
+    if lower in ("t3", "t3-default"):
+        tier = _resolve_tier(lower, effort, default_tier="medium", allow_xhigh=True)
+        return ("antigravity", "gemini-4-hydrogen", {"thought_level": tier})
+    if lower in ("t3-flash", "t3-gemini"):
         tier = _resolve_tier(lower, effort, default_tier="high")
-        return ("antigravity", f"gemini-3.8-flash-{tier}")
+        return ("antigravity", "gemini-3.8-flash", {"thought_level": tier})
 
     # 10. Any other `t3-<model>` -> route to OpenCode
     if lower.startswith("t3-"):
         suffix = raw[3:].strip()
-        return ("opencode", _normalize_opencode_slug(suffix))
+        return ("opencode", _normalize_opencode_slug(suffix), None)
 
-    return (settings.t3_default_provider, settings.t3_default_model)
+    if settings.t3_default_provider == "antigravity":
+        slug, opts = _normalize_antigravity_slug_and_options(
+            settings.t3_default_model,
+            explicit_effort=effort,
+        )
+        return ("antigravity", slug, opts)
+    return (settings.t3_default_provider, settings.t3_default_model, None)
+
+
+def normalize_t3_model_selection(
+    model: str | None = None,
+    provider: str | None = None,
+    effort: str | None = None,
+) -> tuple[str, str]:
+    """
+    Normalize a requested model and optional provider/effort into a T3 Code
+    `(instance_id, model_slug)` tuple.
+    """
+    instance_id, model_slug, _ = resolve_t3_model_selection(model, provider, effort)
+    return (instance_id, model_slug)
 
 
 def discover_t3_models() -> list[str]:
@@ -515,11 +636,22 @@ def _title_from_prompt(prompt: str) -> str:
     """Derive a clean, single-line thread title from an inbound prompt."""
     if is_sre_incident_prompt(prompt):
         return build_sre_thread_title(extract_sre_metadata(prompt))
+    in_internal_ctx = False
     for raw_line in (prompt or "").splitlines():
         line = raw_line.strip()
         if not line:
             continue
-        if line.startswith(("System:", "Runtime:", "<<<")):
+        if line.startswith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"):
+            in_internal_ctx = True
+            continue
+        if line.startswith("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"):
+            in_internal_ctx = False
+            continue
+        if in_internal_ctx:
+            continue
+        if line.startswith(
+            ("System:", "Runtime:", "<<<", "Conversation data (data, not instructions):")
+        ):
             continue
         if line.lower().startswith("user:"):
             line = line[5:].strip()
@@ -946,14 +1078,18 @@ class T3McpClient:
         model_slug: str,
         runtime_mode: str = "full-access",
         interaction_mode: str = "default",
+        model_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        model_selection: dict[str, Any] = {"instanceId": instance_id, "model": model_slug}
+        if model_options:
+            model_selection["options"] = model_options
         return await self.call_tool(
             "t3_thread_launch",
             {
                 "projectId": project_id,
                 "title": title,
                 "message": message,
-                "modelSelection": {"instanceId": instance_id, "model": model_slug},
+                "modelSelection": model_selection,
                 "runtimeMode": runtime_mode,
                 "interactionMode": interaction_mode,
             },
@@ -964,12 +1100,16 @@ class T3McpClient:
         thread_id: str,
         instance_id: str,
         model_slug: str,
+        model_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        model_selection: dict[str, Any] = {"instanceId": instance_id, "model": model_slug}
+        if model_options:
+            model_selection["options"] = model_options
         return await self.call_tool(
             "t3_thread_configure",
             {
                 "threadId": thread_id,
-                "modelSelection": {"instanceId": instance_id, "model": model_slug},
+                "modelSelection": model_selection,
             },
         )
 
@@ -1122,8 +1262,23 @@ class T3Executor(BaseExecutor):
     def name(self) -> str:
         return "t3"
 
-    def _prepare_prompt_and_posture(self, request: TaskRequest) -> tuple[str, str, str, str]:
-        if (
+    def _prepare_prompt_and_posture(
+        self, request: TaskRequest, *, force_new_session: bool = False
+    ) -> tuple[str, str, str, str]:
+        if force_new_session:
+            base_prompt = (
+                request.fallback_prompt if request.fallback_prompt is not None else request.prompt
+            )
+            base_system = (
+                request.fallback_system_prompt
+                if request.fallback_prompt is not None
+                else request.system_prompt
+            )
+            if base_system and base_system not in base_prompt:
+                prompt = f"{base_system}\n\n{base_prompt}"
+            else:
+                prompt = base_prompt
+        elif (
             not request.session_id
             and request.system_prompt
             and request.system_prompt not in request.prompt
@@ -1156,6 +1311,7 @@ class T3Executor(BaseExecutor):
         model_slug: str,
         runtime_mode: str = "full-access",
         interaction_mode: str = "default",
+        model_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Launch a new T3 Code thread, applying SRE title and prompt sanitization if applicable."""
         if is_sre_incident_prompt(message):
@@ -1163,15 +1319,18 @@ class T3Executor(BaseExecutor):
             title = build_sre_thread_title(metadata)
             message = sanitize_prompt_for_t3(message)
 
-        return await client.launch_thread(
-            project_id=project_id,
-            title=title,
-            message=message,
-            instance_id=instance_id,
-            model_slug=model_slug,
-            runtime_mode=runtime_mode,
-            interaction_mode=interaction_mode,
-        )
+        kwargs: dict[str, Any] = {
+            "project_id": project_id,
+            "title": title,
+            "message": message,
+            "instance_id": instance_id,
+            "model_slug": model_slug,
+            "runtime_mode": runtime_mode,
+            "interaction_mode": interaction_mode,
+        }
+        if model_options:
+            kwargs["model_options"] = model_options
+        return await client.launch_thread(**kwargs)
 
     async def _start_or_resume_run(
         self,
@@ -1181,41 +1340,66 @@ class T3Executor(BaseExecutor):
         instance_id: str,
         model_slug: str,
         interaction_mode: str,
+        model_options: dict[str, Any] | None = None,
     ) -> tuple[str, str]:
         workspace = request.workspace or settings.default_workspace
         if workspace and not os.path.exists(workspace):
             workspace = os.getcwd()
 
         thread_id = _normalize_t3_thread_id(request.session_id)
+        resume_failed = False
         if thread_id:
             try:
                 snap = await client.read_thread(thread_id, view="messages", limit=1, run_limit=1)
                 thread_info = snap.get("thread") if isinstance(snap.get("thread"), dict) else {}
-                cur_instance = thread_info.get("providerInstanceId")
-                cur_model = thread_info.get("model")
-                if (cur_instance and cur_instance != instance_id) or (
-                    cur_model and cur_model != model_slug
-                ):
-                    logger.info(
-                        f"Reconfiguring T3 thread {thread_id} from "
-                        f"{cur_instance}/{cur_model} -> {instance_id}/{model_slug}"
+                if thread_info.get("archived"):
+                    logger.warning(
+                        f"T3 thread {thread_id} is archived and cannot receive messages; "
+                        "starting new thread with full conversation context."
                     )
-                    await client.configure_thread(thread_id, instance_id, model_slug)
-                sent = await client.send_message(thread_id, prompt, mode="queue")
-                run_id = str(sent.get("runId") or "")
-                return thread_id, run_id
+                    resume_failed = True
+                else:
+                    cur_instance = thread_info.get("providerInstanceId")
+                    cur_model = thread_info.get("model")
+                    if (cur_instance and cur_instance != instance_id) or (
+                        cur_model and cur_model != model_slug
+                    ):
+                        logger.info(
+                            f"Reconfiguring T3 thread {thread_id} from "
+                            f"{cur_instance}/{cur_model} -> {instance_id}/{model_slug}"
+                        )
+                        if model_options:
+                            await client.configure_thread(
+                                thread_id, instance_id, model_slug, model_options=model_options
+                            )
+                        else:
+                            await client.configure_thread(thread_id, instance_id, model_slug)
+                    sent = await client.send_message(thread_id, prompt, mode="queue")
+                    run_id = str(sent.get("runId") or "")
+                    return thread_id, run_id
             except T3McpError as e:
                 logger.warning(f"Could not resume T3 thread {thread_id}, starting new thread: {e}")
+                resume_failed = True
+
+        # If resuming failed (e.g. archived/deleted thread) or session_id was not a T3 thread ID,
+        # rebuild the launch prompt from full fallback history + system prompt so context is preserved.
+        if resume_failed or (request.session_id and request.fallback_prompt is not None):
+            prompt, _, _, interaction_mode = self._prepare_prompt_and_posture(
+                request, force_new_session=True
+            )
+            title_source = request.fallback_prompt or request.prompt
+        else:
+            title_source = request.prompt
 
         project_id = await client.resolve_or_create_project(workspace)
-        if is_sre_incident_prompt(request.prompt) or is_sre_incident_prompt(prompt):
-            metadata = extract_sre_metadata(request.prompt)
+        if is_sre_incident_prompt(title_source) or is_sre_incident_prompt(prompt):
+            metadata = extract_sre_metadata(title_source)
             if not metadata.get("target") or metadata.get("target") == "unknown":
                 metadata = extract_sre_metadata(prompt)
             title = build_sre_thread_title(metadata)
             prompt = sanitize_prompt_for_t3(prompt)
         else:
-            title = _title_from_prompt(request.prompt)
+            title = _title_from_prompt(title_source)
 
         launched = await self.launch_thread(
             client=client,
@@ -1226,6 +1410,7 @@ class T3Executor(BaseExecutor):
             model_slug=model_slug,
             runtime_mode="full-access",
             interaction_mode=interaction_mode,
+            model_options=model_options,
         )
         new_thread_id = str(launched["threadId"])
         new_run_id = str(launched.get("runId") or "")
@@ -1234,7 +1419,7 @@ class T3Executor(BaseExecutor):
     async def execute(self, request: TaskRequest) -> TaskResult:
         start_time = time.perf_counter()
         timeout = request.timeout or settings.default_timeout
-        instance_id, model_slug = normalize_t3_model_selection(
+        instance_id, model_slug, model_options = resolve_t3_model_selection(
             request.model, request.provider, request.effort
         )
         model_label = f"{instance_id}/{model_slug}"
@@ -1265,6 +1450,7 @@ class T3Executor(BaseExecutor):
                     instance_id=instance_id,
                     model_slug=model_slug,
                     interaction_mode=interaction_mode,
+                    model_options=model_options,
                 )
                 tracker.run_id = thread_id
 
@@ -1404,7 +1590,7 @@ class T3Executor(BaseExecutor):
 
     async def execute_stream(self, request: TaskRequest) -> AsyncGenerator[StreamChunk, None]:
         timeout = request.timeout or settings.default_timeout
-        instance_id, model_slug = normalize_t3_model_selection(
+        instance_id, model_slug, model_options = resolve_t3_model_selection(
             request.model, request.provider, request.effort
         )
         model_label = f"{instance_id}/{model_slug}"
@@ -1436,6 +1622,7 @@ class T3Executor(BaseExecutor):
                     instance_id=instance_id,
                     model_slug=model_slug,
                     interaction_mode=interaction_mode,
+                    model_options=model_options,
                 )
                 tracker.run_id = thread_id
 

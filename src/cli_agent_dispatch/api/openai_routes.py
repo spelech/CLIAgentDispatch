@@ -40,6 +40,13 @@ STATIC_MODEL_ALIASES = [
     "agy-argon-xhigh",
     "agy-argon-max",
     "agy-argon-low",
+    "agy-hydrogen",
+    "agy-hydrogen-low",
+    "agy-hydrogen-medium",
+    "agy-hydrogen-high",
+    "agy-hydrogen-xhigh",
+    "agy-neon",
+    "agy-carbon",
     "agy-opus",
     "agy-opus-medium",
     "agy-opus-xhigh",
@@ -108,7 +115,18 @@ def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | No
         or name_lower.startswith("agy-")
         or any(
             k in name_lower
-            for k in ["agy", "argon", "claude", "gemini", "opus", "sonnet", "gpt-oss"]
+            for k in [
+                "agy",
+                "argon",
+                "neon",
+                "carbon",
+                "hydrogen",
+                "claude",
+                "gemini",
+                "opus",
+                "sonnet",
+                "gpt-oss",
+            ]
         )
     ):
         exec_type = ExecutorType.AGY
@@ -134,7 +152,22 @@ def _format_prompt(messages: list[ChatCompletionMessage]) -> str:
 
 
 def _extract_delta_turn(messages: list[ChatCompletionMessage]) -> str:
-    """Extract only the latest user message for follow-up turns in active sessions."""
+    """Extract the latest delta turn for follow-up turns in active sessions."""
+    last_assistant_idx = -1
+    for idx in range(len(messages) - 1, -1, -1):
+        if messages[idx].role.lower() == "assistant":
+            last_assistant_idx = idx
+            break
+    tail = [m for m in messages[last_assistant_idx + 1 :] if m.role.lower() != "system"]
+    if tail:
+        if len(tail) == 1 and tail[0].role.lower() == "user":
+            return tail[0].content
+        if any(m.role.lower() == "tool" for m in tail):
+            return _format_prompt(tail)
+        if all(m.role.lower() == "user" for m in tail):
+            parts = [m.content for m in tail if m.content]
+            return "\n\n".join(parts) if parts else tail[-1].content
+        return _format_prompt(tail)
     for msg in reversed(messages):
         if msg.role.lower() == "user":
             return msg.content
@@ -154,13 +187,15 @@ async def _stream_chat_completion_sse(
 
     async for chunk in stream_gen:
         if chunk.session_id and client_session_id:
-            await session_store.get_or_create(
+            rec = await session_store.get_or_create(
                 client_id=client_session_id,
                 executor_type=exec_type,
                 native_session_id=chunk.session_id,
                 ephemeral=ephemeral,
                 expires_at=expires_at,
             )
+            if rec.native_session_id != chunk.session_id:
+                await session_store.update_native_id(client_session_id, chunk.session_id)
 
         if chunk.reasoning_delta:
             reasoning_payload = {
@@ -247,13 +282,24 @@ async def create_chat_completion(
     response: Response,
     x_session_id: str | None = Header(default=None),
     x_thread_id: str | None = Header(default=None),
+    x_session_affinity: str | None = Header(default=None),
+    x_openclaw_session_id: str | None = Header(default=None),
+    session_id_header: str | None = Header(default=None, alias="session_id"),
 ):
     """OpenAI-compatible chat completions endpoint delegating to OpenCode, agy, or T3."""
     if not request.messages:
         raise HTTPException(status_code=400, detail="Messages array cannot be empty.")
 
     exec_type, model_override = _resolve_executor_and_model(request.model)
-    client_session_id = request.session_id or request.user or x_session_id or x_thread_id
+    client_session_id = (
+        request.session_id
+        or request.user
+        or x_session_id
+        or x_thread_id
+        or x_session_affinity
+        or x_openclaw_session_id
+        or session_id_header
+    )
 
     native_session_id = None
     is_resumed_turn = False
@@ -340,12 +386,17 @@ async def create_chat_completion(
             )
 
     if is_resumed_turn:
-        # Avoid quadratic history duplication by sending only the latest delta turn
+        # Avoid quadratic history duplication by sending only the latest delta turn,
+        # while keeping full history as fallback if the backing thread was archived or deleted.
         prompt_text = _extract_delta_turn(request.messages)
         system_text = None
+        fallback_prompt = _format_prompt(request.messages)
+        fallback_system_prompt = system_prompt
     else:
         prompt_text = _format_prompt(request.messages)
         system_text = system_prompt
+        fallback_prompt = None
+        fallback_system_prompt = None
 
     # SRE and background cron bypass check: never spawn T3 threads for SRE incidents or background maintenance
     is_sre = is_sre_incident_prompt(prompt_text) or is_sre_incident_prompt(system_text or "")
@@ -357,6 +408,25 @@ async def create_chat_completion(
     is_ephemeral = is_sre or is_bg_cron
     expires_at = time.time() + 86400 if is_ephemeral else None
 
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    active_client_id = client_session_id or f"session_{uuid.uuid4().hex[:12]}"
+
+    full_prompt_snapshot = fallback_prompt or prompt_text
+    await session_store.get_or_create(
+        client_id=active_client_id,
+        executor_type=exec_type,
+        native_session_id=native_session_id,
+        metadata={
+            "last_full_prompt": full_prompt_snapshot[-40000:],
+            "last_user_turn": _extract_delta_turn(request.messages)[-8000:],
+            "system_prompt": (system_prompt or "")[-12000:],
+            "model": model_override or request.model,
+            "recent_steps": [],
+        },
+        ephemeral=is_ephemeral,
+        expires_at=expires_at,
+    )
+
     task_req = TaskRequest(
         prompt=prompt_text,
         system_prompt=system_text,
@@ -364,10 +434,10 @@ async def create_chat_completion(
         executor=exec_type,
         model=model_override,
         effort=request.effort or request.reasoning_effort,
+        fallback_prompt=fallback_prompt,
+        fallback_system_prompt=fallback_system_prompt,
+        client_session_id=active_client_id,
     )
-
-    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-    active_client_id = client_session_id or f"session_{uuid.uuid4().hex[:12]}"
 
     if request.stream:
         stream_gen = engine.dispatch_stream(task_req)
@@ -398,13 +468,15 @@ async def create_chat_completion(
 
     # Persist session mapping
     resolved_native_id = result.session_id or native_session_id
-    await session_store.get_or_create(
+    rec = await session_store.get_or_create(
         client_id=active_client_id,
         executor_type=exec_type,
         native_session_id=resolved_native_id,
         ephemeral=is_ephemeral,
         expires_at=expires_at,
     )
+    if resolved_native_id and rec.native_session_id != resolved_native_id:
+        await session_store.update_native_id(active_client_id, resolved_native_id)
 
     response.headers["x-session-id"] = active_client_id
     response.headers["x-native-session-id"] = str(resolved_native_id or "")

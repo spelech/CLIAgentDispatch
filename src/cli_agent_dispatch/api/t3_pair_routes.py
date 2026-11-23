@@ -55,12 +55,18 @@ async def create_t3_pairing_link(
         raise RuntimeError("T3 pairing output did not include a credential.")
 
     pair_url = str(data.get("pairUrl") or f"{ui_base}/pair#token={credential}")
+    lan_base = (settings.t3_lan_url or "http://10.0.0.10:3773").rstrip("/")
+    tailscale_base = (settings.t3_tailscale_url or "http://100.64.0.1:3773").rstrip("/")
     return {
         "id": data.get("id"),
         "credential": credential,
         "label": data.get("label") or label,
         "expires_at": data.get("expiresAt"),
         "pair_url": pair_url,
+        "lan_url": lan_base,
+        "lan_pair_url": f"{lan_base}/pair#token={credential}",
+        "tailscale_url": tailscale_base,
+        "tailscale_pair_url": f"{tailscale_base}/pair#token={credential}",
         "ui_url": ui_base,
     }
 
@@ -88,13 +94,22 @@ async def send_t3_pairing_ntfy(
 
     # Note: Do NOT set "click" so tapping the notification body simply opens
     # the notification inside the ntfy app without launching the T3 site.
+    lan_url = str(pair_data.get("lan_url") or settings.t3_lan_url).rstrip("/")
+    lan_pair_url = str(pair_data.get("lan_pair_url") or f"{lan_url}/pair#token={credential}")
+    tailscale_url = str(pair_data.get("tailscale_url") or settings.t3_tailscale_url).rstrip("/")
+    tailscale_pair_url = str(
+        pair_data.get("tailscale_pair_url") or f"{tailscale_url}/pair#token={credential}"
+    )
     payload = {
         "topic": topic,
         "title": f"T3 Code Pairing ({label})",
         "markdown": True,
         "message": (
-            f"Pairing code for **{label}** (Server: `{ui_url}`):\n"
+            f"Pairing code for **{label}**:\n"
             f"```\n{credential}\n```\n"
+            f"• **HTTPS**: `{pair_url}`\n"
+            f"• **LAN (`10.0.0.10`)**: `{lan_pair_url}`\n"
+            f"• **Tailscale**: `{tailscale_pair_url}`\n"
             f"Expires: `{expires_at}`"
         ),
         "priority": 4,
@@ -102,7 +117,7 @@ async def send_t3_pairing_ntfy(
         "actions": [
             {
                 "action": "view",
-                "label": "📋 Copy Code",
+                "label": "📋 Copy Code / LAN Link",
                 "url": copy_url,
                 "clear": False,
             },
@@ -134,6 +149,8 @@ async def send_t3_pairing_ntfy(
 
 def _render_pair_card_html(pair_data: dict[str, Any], ntfy_sent: bool, user_label: str) -> str:
     pair_url = _html.escape(str(pair_data["pair_url"]), quote=True)
+    lan_pair_url = _html.escape(str(pair_data.get("lan_pair_url") or ""), quote=True)
+    tailscale_pair_url = _html.escape(str(pair_data.get("tailscale_pair_url") or ""), quote=True)
     credential = _html.escape(str(pair_data["credential"]), quote=True)
     expires_at = _html.escape(str(pair_data.get("expires_at") or ""), quote=True)
     safe_user = _html.escape(str(user_label), quote=True)
@@ -213,10 +230,12 @@ def _render_pair_card_html(pair_data: dict[str, Any], ntfy_sent: bool, user_labe
     <p class="sub">Authenticated as <strong>{safe_user}</strong></p>
     <div class="code" id="pair-code">{credential}</div>
     <button class="btn" type="button" onclick="copyText('{credential}', this, '📋 Copy Pairing Code')">📋 Copy Pairing Code</button>
-    <button class="btn secondary" type="button" onclick="copyText('{pair_url}', this, '🔗 Copy Pairing Link')">🔗 Copy Pairing Link</button>
+    <button class="btn secondary" type="button" onclick="copyText('{lan_pair_url}', this, '🏠 Copy LAN Link (10.0.0.10:3773)')">🏠 Copy LAN Link (10.0.0.10:3773)</button>
+    <button class="btn secondary" type="button" onclick="copyText('{pair_url}', this, '🔗 Copy HTTPS Link (ttt.wileyriley.com)')">🔗 Copy HTTPS Link (ttt.wileyriley.com)</button>
+    <button class="btn secondary" type="button" onclick="copyText('{tailscale_pair_url}', this, '🌐 Copy Tailscale Link (100.64.0.1:3773)')">🌐 Copy Tailscale Link (100.64.0.1:3773)</button>
     <a class="btn secondary" href="{pair_url}">🚀 Pair This Browser Now</a>
     <a class="btn secondary" href="/sso-pair?mode=card&notify=1">📲 Push Link to ntfy (Phone / Tablet)</a>
-    <div class="meta">Server URL: <code>https://ttt.wileyriley.com</code><br/>{ntfy_badge}<br/>Expires: {expires_at}</div>
+    <div class="meta">Server URLs: <code>https://ttt.wileyriley.com</code> · <code>http://10.0.0.10:3773</code><br/>{ntfy_badge}<br/>Expires: {expires_at}</div>
   </div>
   <script>
     async function copyText(val, btn, originalLabel) {{
@@ -305,6 +324,8 @@ async def sso_pair_copy_only() -> HTMLResponse:
     Does NOT open the T3 Code web app or consume the single-use pairing token.
     """
     ui_url = settings.t3_ui_url.rstrip("/")
+    lan_url = (settings.t3_lan_url or "http://10.0.0.10:3773").rstrip("/")
+    tailscale_url = (settings.t3_tailscale_url or "http://100.64.0.1:3773").rstrip("/")
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -353,13 +374,17 @@ async def sso_pair_copy_only() -> HTMLResponse:
       width: 100%;
       border: none;
       cursor: pointer;
-      font-size: 1rem;
+      font-size: 0.96rem;
       background: #2563eb;
       color: #ffffff;
       font-weight: 600;
-      padding: 0.95rem 1.25rem;
+      padding: 0.9rem 1.25rem;
       border-radius: 10px;
       margin-bottom: 0.75rem;
+    }}
+    button.btn.secondary {{
+      background: #1f2937;
+      color: #e5e7eb;
     }}
     .meta {{ color: #6b7280; font-size: 0.8rem; margin-top: 1rem; }}
   </style>
@@ -369,10 +394,16 @@ async def sso_pair_copy_only() -> HTMLResponse:
     <h1>📋 T3 Mobile App Pairing Code</h1>
     <p class="sub" id="status-msg">Tap below to copy for the T3 mobile app (token is NOT consumed here)</p>
     <div class="code" id="code-box">---</div>
-    <button class="btn" id="copy-btn" type="button" onclick="copyCode()">📋 Copy Pairing Code</button>
-    <div class="meta">Server URL: <code>{ui_url}</code><br/><span id="exp-box"></span></div>
+    <button class="btn" id="copy-btn" type="button" onclick="copyVal(CODE, this, '📋 Copy Pairing Code')">📋 Copy Pairing Code</button>
+    <button class="btn secondary" id="copy-lan-btn" type="button" onclick="copyVal(LAN_URL + '/pair#token=' + CODE, this, '🏠 Copy LAN Link (10.0.0.10:3773)')">🏠 Copy LAN Link (10.0.0.10:3773)</button>
+    <button class="btn secondary" id="copy-https-btn" type="button" onclick="copyVal(UI_URL + '/pair#token=' + CODE, this, '🔗 Copy HTTPS Link (ttt.wileyriley.com)')">🔗 Copy HTTPS Link (ttt.wileyriley.com)</button>
+    <button class="btn secondary" id="copy-ts-btn" type="button" onclick="copyVal(TS_URL + '/pair#token=' + CODE, this, '🌐 Copy Tailscale Link (100.64.0.1:3773)')">🌐 Copy Tailscale Link (100.64.0.1:3773)</button>
+    <div class="meta">Server URLs: <code>{ui_url}</code> · <code>{lan_url}</code><br/><span id="exp-box"></span></div>
   </div>
   <script>
+    const UI_URL = "{ui_url}";
+    const LAN_URL = "{lan_url}";
+    const TS_URL = "{tailscale_url}";
     const params = new URLSearchParams(window.location.search);
     const CODE = (params.get("code") || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32);
     const EXP = (params.get("expires") || "").slice(0, 40);
@@ -380,26 +411,29 @@ async def sso_pair_copy_only() -> HTMLResponse:
     if (EXP) {{
       document.getElementById("exp-box").textContent = "Expires: " + EXP;
     }}
-    async function copyCode() {{
-      if (!CODE) return;
-      const btn = document.getElementById("copy-btn");
+    async function copyVal(val, btn, originalLabel) {{
+      if (!CODE || !val) return;
       const status = document.getElementById("status-msg");
       try {{
-        await navigator.clipboard.writeText(CODE);
+        await navigator.clipboard.writeText(val);
         btn.textContent = "✅ Copied to Clipboard!";
-        status.textContent = "Paste this code into your T3 mobile/tablet app.";
+        status.textContent = "Paste into your T3 mobile/tablet app (Add route / Add environment).";
+        setTimeout(() => {{ btn.textContent = originalLabel; }}, 2000);
       }} catch (e) {{
         const el = document.createElement("textarea");
-        el.value = CODE;
+        el.value = val;
         document.body.appendChild(el);
         el.select();
         document.execCommand("copy");
         document.body.removeChild(el);
         btn.textContent = "✅ Copied to Clipboard!";
-        status.textContent = "Paste this code into your T3 mobile/tablet app.";
+        status.textContent = "Paste into your T3 mobile/tablet app (Add route / Add environment).";
+        setTimeout(() => {{ btn.textContent = originalLabel; }}, 2000);
       }}
     }}
-    window.addEventListener("DOMContentLoaded", () => {{ copyCode(); }});
+    window.addEventListener("DOMContentLoaded", () => {{
+      copyVal(CODE, document.getElementById("copy-btn"), "📋 Copy Pairing Code");
+    }});
   </script>
 </body>
 </html>"""

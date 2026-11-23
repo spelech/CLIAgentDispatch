@@ -48,6 +48,58 @@ class TaskRequest(BaseModel):
         default=None,
         description="Execution timeout in seconds.",
     )
+    fallback_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Full formatted conversation prompt to use if resuming session_id fails "
+            "and a new native session must be launched."
+        ),
+    )
+    fallback_system_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Full system prompt to use if resuming session_id fails "
+            "and a new native session must be launched."
+        ),
+    )
+    client_session_id: str | None = Field(
+        default=None,
+        description="External client/OpenClaw session key used for session binding and handoff.",
+    )
+
+
+class T3HandoffRequest(BaseModel):
+    abort_active: bool = Field(
+        default=True,
+        description="Abort any currently running agy/opencode subprocess before launching T3.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Optional T3 model override (defaults to t3 / gemini-4-hydrogen medium).",
+    )
+    effort: str | None = Field(
+        default=None,
+        description="Optional reasoning effort override ('low', 'medium', 'high', 'xhigh').",
+    )
+    note: str | None = Field(
+        default=None,
+        description="Optional additional instruction to append to the T3 handoff prompt.",
+    )
+    workspace: str | None = Field(
+        default=None,
+        description="Optional workspace directory override.",
+    )
+
+
+class T3HandoffResponse(BaseModel):
+    status: str
+    session_id: str
+    thread_id: str
+    run_id: str | None = None
+    t3_url: str
+    aborted: bool = False
+    bound: bool = True
+    model: str
 
 
 class TaskResult(BaseModel):

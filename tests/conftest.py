@@ -9,6 +9,7 @@ from cli_agent_dispatch.main import app
 def override_settings(tmp_path):
     """Ensure safe isolated test environments."""
     settings.default_workspace = str(tmp_path)
+    settings.session_db_path = str(tmp_path / "sessions.db")
     yield
 
 
