@@ -540,10 +540,11 @@ def extract_sre_metadata(prompt: str | None) -> dict[str, str]:
     status_hint = ""
     if exit_match:
         raw_exit = exit_match.group(1).strip().strip("\"'")
-        paren_match = re.search(r"(\S+)\s*\(([^)]+)\)", raw_exit)
-        if paren_match:
-            metadata["exit_code"] = paren_match.group(1).strip()
-            status_hint = paren_match.group(2).strip()
+        open_idx = raw_exit.find("(")
+        close_idx = raw_exit.find(")", open_idx + 1) if open_idx > 0 else -1
+        if open_idx > 0 and close_idx > open_idx + 1:
+            metadata["exit_code"] = raw_exit[:open_idx].strip()
+            status_hint = raw_exit[open_idx + 1 : close_idx].strip()
         else:
             metadata["exit_code"] = raw_exit
 
