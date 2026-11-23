@@ -26,6 +26,7 @@ from cli_agent_dispatch.executors.t3 import (
     discover_t3_models,
     format_t3_activity_item,
     normalize_t3_model_selection,
+    resolve_t3_model_selection,
 )
 from cli_agent_dispatch.main import app
 from cli_agent_dispatch.mcp.server import (
@@ -42,14 +43,18 @@ from cli_agent_dispatch.mcp.server import (
 @pytest.mark.parametrize(
     ("model", "provider", "effort", "expected"),
     [
-        (None, None, None, ("antigravity", "gemini-3.8-flash-high")),
-        ("t3", None, None, ("antigravity", "gemini-3.8-flash-high")),
-        ("t3-agy", None, "low", ("antigravity", "gemini-3.8-flash-low")),
-        ("t3-agy-flash-medium", None, None, ("antigravity", "gemini-3.8-flash-medium")),
-        ("t3-agy-argon", None, None, ("antigravity", "gemini-4-argon-medium")),
-        ("t3-agy-argon-high", None, None, ("antigravity", "gemini-4-argon-high")),
-        ("t3-agy-argon", None, "max", ("antigravity", "gemini-4-argon-high")),
-        ("t3-agy-argon-low", None, None, ("antigravity", "gemini-4-argon-low")),
+        (None, None, None, ("antigravity", "gemini-4-hydrogen")),
+        ("t3", None, None, ("antigravity", "gemini-4-hydrogen")),
+        ("t3-agy", None, "low", ("antigravity", "gemini-3.8-flash")),
+        ("t3-agy-flash-medium", None, None, ("antigravity", "gemini-3.8-flash")),
+        ("t3-agy-argon", None, None, ("antigravity", "gemini-4-argon")),
+        ("t3-agy-argon-high", None, None, ("antigravity", "gemini-4-argon")),
+        ("t3-agy-argon", None, "max", ("antigravity", "gemini-4-argon")),
+        ("t3-agy-argon-low", None, None, ("antigravity", "gemini-4-argon")),
+        ("t3-agy-neon", None, None, ("antigravity", "gemini-4-neon")),
+        ("t3-agy-neon-xhigh", None, None, ("antigravity", "gemini-4-neon")),
+        ("t3-agy-carbon", None, None, ("antigravity", "gemini-4-carbon")),
+        ("t3-agy-hydrogen-xhigh", None, None, ("antigravity", "gemini-4-hydrogen")),
         ("t3-opus", None, None, ("opencode", "google-agy/claude-opus-5-5")),
         ("t3-agy-opus", None, None, ("opencode", "google-agy/claude-opus-5-5")),
         ("t3-sonnet", None, None, ("opencode", "google-agy/claude-sonnet-5-5")),
@@ -75,12 +80,13 @@ from cli_agent_dispatch.mcp.server import (
         ("t3-opencode-agy-argon", None, None, ("opencode", "google-agy/gemini-4-argon")),
         ("t3-opencode-glm", None, None, ("opencode", "litellm/glm")),
         ("t3-opencode-deepseek-pro", None, None, ("opencode", "litellm/deepseek-pro")),
-        ("t3/antigravity/gemini-4-argon-high", None, None, ("antigravity", "gemini-4-argon-high")),
+        ("t3/antigravity/gemini-4-argon-high", None, None, ("antigravity", "gemini-4-argon")),
+        ("t3/antigravity/gpt-oss-120b-medium", None, None, ("antigravity", "gpt-oss-120b-medium")),
         ("t3/opencode/litellm/qwen-max", None, None, ("opencode", "litellm/qwen-max")),
         ("t3/opencode/glm-flash", None, None, ("opencode", "litellm/glm-flash")),
-        ("t3-acp/gemini-3.8-flash-low", None, None, ("antigravity", "gemini-3.8-flash-low")),
+        ("t3-acp/gemini-3.8-flash-low", None, None, ("antigravity", "gemini-3.8-flash")),
         ("t3-opencode/claude-opus-5-5", None, None, ("opencode", "google-agy/claude-opus-5-5")),
-        ("openai/t3-agy-argon-high", None, None, ("antigravity", "gemini-4-argon-high")),
+        ("openai/t3-agy-argon-high", None, None, ("antigravity", "gemini-4-argon")),
         ("glm", "opencode", None, ("opencode", "litellm/glm")),
         ("gemini-3.8-flash-low", "opencode", None, ("opencode", "litellm/flash-latest")),
     ],
@@ -92,6 +98,84 @@ def test_normalize_t3_model_selection(
     expected: tuple[str, str],
 ) -> None:
     assert normalize_t3_model_selection(model, provider, effort) == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "effort", "expected"),
+    [
+        (None, None, None, ("antigravity", "gemini-4-hydrogen", {"thought_level": "medium"})),
+        ("t3", None, None, ("antigravity", "gemini-4-hydrogen", {"thought_level": "medium"})),
+        ("t3-agy", None, "low", ("antigravity", "gemini-3.8-flash", {"thought_level": "low"})),
+        (
+            "t3-agy-flash-medium",
+            None,
+            None,
+            ("antigravity", "gemini-3.8-flash", {"thought_level": "medium"}),
+        ),
+        (
+            "t3-agy-argon",
+            None,
+            None,
+            ("antigravity", "gemini-4-argon", {"thought_level": "medium"}),
+        ),
+        (
+            "t3-agy-argon-high",
+            None,
+            None,
+            ("antigravity", "gemini-4-argon", {"thought_level": "high"}),
+        ),
+        (
+            "t3-agy-argon",
+            None,
+            "max",
+            ("antigravity", "gemini-4-argon", {"thought_level": "high"}),
+        ),
+        (
+            "t3-agy-neon-xhigh",
+            None,
+            None,
+            ("antigravity", "gemini-4-neon", {"thought_level": "xhigh"}),
+        ),
+        (
+            "t3-agy-carbon-low",
+            None,
+            None,
+            ("antigravity", "gemini-4-carbon", {"thought_level": "low"}),
+        ),
+        (
+            "t3-agy-hydrogen",
+            None,
+            "max",
+            ("antigravity", "gemini-4-hydrogen", {"thought_level": "xhigh"}),
+        ),
+        (
+            "t3/antigravity/gemini-4-argon-high",
+            None,
+            None,
+            ("antigravity", "gemini-4-argon", {"thought_level": "high"}),
+        ),
+        (
+            "t3-acp/gemini-3.8-flash-low",
+            None,
+            None,
+            ("antigravity", "gemini-3.8-flash", {"thought_level": "low"}),
+        ),
+        (
+            "t3/antigravity/gpt-oss-120b-medium",
+            None,
+            None,
+            ("antigravity", "gpt-oss-120b-medium", None),
+        ),
+        ("t3-vertex", None, None, ("opencode", "litellm/flash-latest", None)),
+    ],
+)
+def test_resolve_t3_model_selection_with_options(
+    model: str | None,
+    provider: str | None,
+    effort: str | None,
+    expected: tuple[str, str, dict[str, str] | None],
+) -> None:
+    assert resolve_t3_model_selection(model, provider, effort) == expected
 
 
 def test_discover_t3_models_and_route_resolvers() -> None:
@@ -203,7 +287,7 @@ class FakeT3McpClient:
         self.sent_calls: list[tuple[str, str]] = []
         self.interrupted_calls: list[tuple[str, str | None]] = []
         self.thread_provider = "antigravity"
-        self.thread_model = "gemini-3.8-flash-high"
+        self.thread_model = "gemini-3.8-flash"
         self.wait_responses: list[dict[str, Any]] = [
             {"timedOut": False, "status": "completed", "runId": "run:1"}
         ]
@@ -224,7 +308,11 @@ class FakeT3McpClient:
         return {"threadId": "mcp:unit-thread-1", "projectId": "proj-123", "runId": "run:1"}
 
     async def configure_thread(
-        self, thread_id: str, instance_id: str, model_slug: str
+        self,
+        thread_id: str,
+        instance_id: str,
+        model_slug: str,
+        model_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.configured_calls.append((thread_id, instance_id, model_slug))
         self.thread_provider = instance_id
@@ -635,7 +723,7 @@ async def test_sso_pair_routes_and_ntfy_push(tmp_path: Any) -> None:
         assert "click" not in ntfy_payload
         assert ntfy_payload["markdown"] is True
         action_labels = [a["label"] for a in ntfy_payload["actions"]]
-        assert "📋 Copy Code" in action_labels
+        assert "📋 Copy Code / LAN Link" in action_labels
         assert "🚀 Pair This Browser" in action_labels
 
         # 5. MCP tool generate_t3_pairing_link
@@ -713,3 +801,169 @@ def test_live_e2e_openai_route_with_t3() -> None:
     content = data["choices"][0]["message"]["content"]
     assert "E2E_OK" in content
     assert resp.headers.get("x-native-session-id", "").startswith("mcp:")
+
+
+@pytest.mark.asyncio
+async def test_t3_executor_archived_thread_fallback_launches_with_full_history() -> None:
+    from cli_agent_dispatch.executors.t3 import T3McpError
+
+    class ArchivedThreadFakeClient(FakeT3McpClient):
+        archived_flag = True
+        raise_on_send = False
+
+        async def read_thread(
+            self, thread_id: str, view: str = "activity", **kwargs: Any
+        ) -> dict[str, Any]:
+            data = await super().read_thread(thread_id, view=view, **kwargs)
+            data["thread"]["archived"] = self.archived_flag
+            return data
+
+        async def send_message(
+            self, thread_id: str, message: str, mode: str = "queue"
+        ) -> dict[str, Any]:
+            if self.raise_on_send:
+                raise T3McpError(
+                    'T3 t3_thread_send failed: {"code":"thread_not_sendable","message":"Thread is archived"}'
+                )
+            return await super().send_message(thread_id, message, mode=mode)
+
+    # Case A: read_thread reports archived=True -> launches fresh thread with full fallback history
+    ArchivedThreadFakeClient.instances.clear()
+    ArchivedThreadFakeClient.archived_flag = True
+    ArchivedThreadFakeClient.raise_on_send = False
+    executor = T3Executor(client_factory=ArchivedThreadFakeClient)  # type: ignore[arg-type]
+
+    req = TaskRequest(
+        prompt=(
+            "Follow-up question about Tuesday\n\n"
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nActive exec sessions:\nnone\n"
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"
+        ),
+        system_prompt=None,
+        session_id="mcp:archived-thread-1",
+        executor=ExecutorType.T3,
+        model="t3",
+        workspace="/containers/dev/CLIAgentDispatch",
+        fallback_prompt=(
+            "System: You are OpenClaw.\n\n"
+            "User: Initial Molly analysis\n\n"
+            "Assistant: Her interest is high\n\n"
+            "User: Follow-up question about Tuesday\n\n"
+            "User: <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n"
+            "Active exec sessions:\nnone\n"
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"
+        ),
+        fallback_system_prompt="You are OpenClaw.",
+    )
+    res = await executor.execute(req)
+    assert res.success is True
+    assert res.session_id == "mcp:unit-thread-1"
+    client_a = ArchivedThreadFakeClient.instances[-1]
+    assert client_a.sent_calls == []
+    assert len(client_a.launched_calls) == 1
+    launched_a = client_a.launched_calls[0]
+    assert "Initial Molly analysis" in launched_a["message"]
+    assert "Her interest is high" in launched_a["message"]
+    assert "Follow-up question about Tuesday" in launched_a["message"]
+    assert "ACTIVE EXECUTION POSTURE" in launched_a["message"]
+    assert launched_a["title"] != "Conversation data (data, not instructions):"
+
+    # Case B: read_thread did not report archived, but send_message raises T3McpError -> same full fallback
+    ArchivedThreadFakeClient.instances.clear()
+    ArchivedThreadFakeClient.archived_flag = False
+    ArchivedThreadFakeClient.raise_on_send = True
+    chunks = [c async for c in executor.execute_stream(req)]
+    assert any(c.session_id == "mcp:unit-thread-1" for c in chunks)
+    client_b = ArchivedThreadFakeClient.instances[-1]
+    assert len(client_b.launched_calls) == 1
+    launched_b = client_b.launched_calls[0]
+    assert "Initial Molly analysis" in launched_b["message"]
+    assert "Follow-up question about Tuesday" in launched_b["message"]
+
+
+@pytest.mark.asyncio
+async def test_handoff_session_to_t3_aborts_launches_and_binds() -> None:
+    """Verify /v1/sessions/{id}/handoff-t3 aborts active agy run, auto-starts T3, and binds session."""
+    client_id = "agent:main:slack:channel:C0TEST:thread:1795000000.123456"
+    await session_store.delete(client_id)
+    await session_store.get_or_create(
+        client_id=client_id,
+        executor_type=ExecutorType.AGY,
+        native_session_id="conv_agy_999",
+        metadata={
+            "last_full_prompt": "User: Fix caddy TLS timeout on port 443",
+            "last_user_turn": "Fix caddy TLS timeout on port 443",
+            "workspace": "/containers/dev/CLIAgentDispatch",
+            "recent_steps": [
+                {
+                    "step_index": 1,
+                    "tool_name": "run_command",
+                    "state": "DONE",
+                    "detail": "`docker compose ps`",
+                }
+            ],
+        },
+    )
+
+    aborted_called = False
+
+    async def _fake_cancel() -> bool:
+        nonlocal aborted_called
+        aborted_called = True
+        return True
+
+    session_store.register_cancel_callback(client_id, _fake_cancel)
+
+    FakeT3McpClient.instances.clear()
+    with patch("cli_agent_dispatch.executors.t3.T3McpClient", FakeT3McpClient):
+        http = TestClient(app)
+        resp = http.post(f"/v1/sessions/{client_id}/handoff-t3", json={"abort_active": True})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["status"] == "handed_off"
+        assert data["aborted"] is True
+        assert aborted_called is True
+        assert data["bound"] is True
+        assert data["thread_id"] == "mcp:unit-thread-1"
+        assert data["t3_url"].startswith(settings.t3_ui_url.rstrip("/"))
+        assert data["model"] == "antigravity/gemini-4-hydrogen"
+
+        # Verify T3 launch received full context, tool steps, and auto-start instruction
+        launched = FakeT3McpClient.instances[-1].launched_calls[0]
+        assert launched["instance_id"] == "antigravity"
+        assert launched["model_slug"] == "gemini-4-hydrogen"
+        assert launched["model_options"] == {"thought_level": "medium"}
+        assert "Fix caddy TLS timeout on port 443" in launched["message"]
+        assert "docker compose ps" in launched["message"]
+        assert "immediately" in launched["message"].lower()
+
+        # Verify session_store is now bound to T3
+        bound_rec = await session_store.get(client_id)
+        assert bound_rec is not None
+        assert bound_rec.executor_type == ExecutorType.T3
+        assert bound_rec.native_session_id == "mcp:unit-thread-1"
+
+        # Verify idempotent second click does not spawn a duplicate thread
+        resp2 = http.post(f"/v1/sessions/{client_id}/handoff-t3", json={"abort_active": True})
+        assert resp2.status_code == 200
+        assert resp2.json()["status"] == "already_in_t3"
+        assert len(FakeT3McpClient.instances) == 1
+
+    await session_store.delete(client_id)
+
+
+def test_slack_activity_tracker_renders_handoff_button_for_agy() -> None:
+    tracker = SlackActivityTracker(
+        run_id="run_abc",
+        model="Gemini 4 Hydrogen (Medium)",
+        mode="normal",
+        scope="home",
+        prompt="channel=slack",
+        enabled=False,
+        handoff_session_id="agent:main:slack:channel:C0TEST:thread:1.2",
+    )
+    _, blocks = tracker._build_blocks(status="running")
+    actions = blocks[1]["elements"]
+    handoff_btn = next(el for el in actions if el["action_id"] == "escalate_to_t3")
+    assert handoff_btn["value"] == "agent:main:slack:channel:C0TEST:thread:1.2"
+    assert "url" not in handoff_btn

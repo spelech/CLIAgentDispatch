@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from cli_agent_dispatch.config import settings
 from cli_agent_dispatch.core.engine import engine
 from cli_agent_dispatch.core.exceptions import ExecutorNotFoundError
 from cli_agent_dispatch.core.models import (
@@ -19,6 +20,8 @@ from cli_agent_dispatch.core.models import (
     ScreenshotResponse,
     SessionCreateRequest,
     SessionMessageRequest,
+    T3HandoffRequest,
+    T3HandoffResponse,
     TaskRequest,
     TaskResult,
     resolve_upload_dir,
@@ -188,6 +191,188 @@ async def archive_session(session_id: str) -> dict[str, Any]:
         await session_store.mark_archived(native_id)
 
     return {"status": "archived", "thread_id": thread_id}
+
+
+def _build_t3_thread_ui_url(thread_id: str, raw_link: str | None = None) -> str:
+    """Build a direct T3 Code UI link pointing to settings.t3_ui_url."""
+    base = settings.t3_ui_url.rstrip("/")
+    if raw_link:
+        parsed = urllib.parse.urlsplit(raw_link)
+        if parsed.path:
+            return f"{base}{parsed.path}"
+    encoded_tid = urllib.parse.quote(thread_id, safe="")
+    return f"{base}/threads/{encoded_tid}"
+
+
+def _build_handoff_prompt(
+    *,
+    full_prompt: str,
+    last_user_turn: str,
+    recent_steps: list[dict[str, Any]],
+    aborted: bool,
+    note: str | None = None,
+) -> str:
+    """Assemble a self-starting continuation prompt for T3 Code handoff."""
+    sections: list[str] = [
+        "=== OPENCLAW → T3 CODE HANDOFF ===",
+        (
+            "The user clicked 'Hand off to T3' while the previous OpenClaw agent turn was actively "
+            "running. The previous turn was aborted so you can take over cleanly. Immediately "
+            "continue and complete the user's request below without waiting for manual confirmation."
+            if aborted
+            else "The user handed off this OpenClaw session to T3 Code so they can continue here. "
+            "Review the context below and immediately continue any remaining work (or concisely "
+            "confirm current state and next step if the last turn already completed)."
+        ),
+    ]
+
+    if recent_steps:
+        step_lines: list[str] = []
+        for st in recent_steps[-15:]:
+            state = str(st.get("state") or "DONE").upper()
+            tool_name = str(st.get("tool_name") or "tool")
+            detail = str(st.get("detail") or "").strip()
+            step_lines.append(
+                f"- [{state}] {tool_name}: {detail}" if detail else f"- [{state}] {tool_name}"
+            )
+        sections.append("## Tool Steps Already Executed Before Handoff\n" + "\n".join(step_lines))
+
+    if full_prompt:
+        sections.append("## Conversation Context\n" + full_prompt[-30000:])
+    elif last_user_turn:
+        sections.append("## Latest User Request\n" + last_user_turn[-8000:])
+
+    if note:
+        sections.append("## Handoff Note\n" + note.strip())
+
+    return "\n\n".join(sections)
+
+
+@router.post("/sessions/{session_id}/handoff-t3", response_model=T3HandoffResponse)
+async def handoff_session_to_t3(
+    session_id: str,
+    request: T3HandoffRequest | None = None,
+) -> T3HandoffResponse:
+    """
+    Out-of-band handoff from an active or completed agy/OpenClaw session into a new T3 Code
+    thread. Aborts any in-flight subprocess (when abort_active=True), immediately launches and
+    starts the continuation prompt in T3 Code, and binds the client session to T3 for future turns.
+    """
+    req = request or T3HandoffRequest()
+    record = await session_store.get_by_any_id(session_id)
+    client_id = record.client_id if record else session_id
+
+    # Idempotency: if already bound to a live T3 thread, return it directly
+    if (
+        record
+        and record.executor_type == ExecutorType.T3
+        and record.native_session_id
+        and record.native_session_id.startswith("mcp:")
+        and not record.archived
+    ):
+        existing_url = str(
+            record.metadata.get("t3_url") or _build_t3_thread_ui_url(record.native_session_id)
+        )
+        return T3HandoffResponse(
+            status="already_in_t3",
+            session_id=client_id,
+            thread_id=record.native_session_id,
+            run_id=None,
+            t3_url=existing_url,
+            aborted=False,
+            bound=True,
+            model=str(record.metadata.get("t3_model") or settings.t3_default_model),
+        )
+
+    # 1. Abort any currently running subprocess for this session (never blocks OpenClaw loop)
+    aborted = False
+    if req.abort_active:
+        candidate_ids = [session_id]
+        if client_id not in candidate_ids:
+            candidate_ids.append(client_id)
+        if record and record.native_session_id and record.native_session_id not in candidate_ids:
+            candidate_ids.append(record.native_session_id)
+        for cid in candidate_ids:
+            if await session_store.kill_active_process(cid):
+                aborted = True
+
+    # 2. Gather conversation context & recent tool steps
+    meta = record.metadata if record else {}
+    full_prompt = str(meta.get("last_full_prompt") or "")
+    last_user_turn = str(meta.get("last_user_turn") or "")
+    recent_steps = meta.get("recent_steps") if isinstance(meta.get("recent_steps"), list) else []
+    workspace = req.workspace or str(meta.get("workspace") or settings.default_workspace)
+    if workspace and not os.path.exists(workspace):
+        workspace = os.getcwd()
+
+    from cli_agent_dispatch.executors.t3 import (
+        T3McpClient,
+        _title_from_prompt,
+        resolve_t3_model_selection,
+    )
+
+    instance_id, model_slug, model_options = resolve_t3_model_selection(
+        req.model or "t3",
+        effort=req.effort,
+    )
+    handoff_prompt = _build_handoff_prompt(
+        full_prompt=full_prompt,
+        last_user_turn=last_user_turn,
+        recent_steps=recent_steps,
+        aborted=aborted,
+        note=req.note,
+    )
+    title = _title_from_prompt(last_user_turn or full_prompt or f"OpenClaw Handoff ({client_id})")
+
+    # 3. Launch T3 thread immediately with the continuation prompt so it auto-starts
+    try:
+        async with T3McpClient() as client:
+            project_id = await client.resolve_or_create_project(workspace)
+            launched = await client.launch_thread(
+                project_id=project_id,
+                title=title,
+                message=handoff_prompt,
+                instance_id=instance_id,
+                model_slug=model_slug,
+                runtime_mode="full-access",
+                interaction_mode="default",
+                model_options=model_options,
+            )
+    except Exception as e:
+        logger.error(f"Failed to hand off session '{client_id}' to T3 Code: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to hand off session to T3: {e}") from e
+
+    thread_id = str(launched.get("threadId") or "")
+    run_id = str(launched.get("runId") or "") or None
+    if not thread_id:
+        raise HTTPException(status_code=500, detail="T3 launch did not return a threadId.")
+
+    t3_url = _build_t3_thread_ui_url(thread_id, launched.get("link"))
+
+    # 4. Bind the Slack/client session to T3 so future replies continue in this T3 thread
+    await session_store.upgrade_executor(
+        client_id=client_id,
+        executor_type=ExecutorType.T3,
+        native_session_id=thread_id,
+        metadata={
+            "t3_url": t3_url,
+            "t3_model": model_slug,
+            "handed_off_at": time.time(),
+            "handed_off_from": str(record.executor_type) if record else "unknown",
+        },
+    )
+    register_session_executor(thread_id, ExecutorType.T3)
+
+    return T3HandoffResponse(
+        status="handed_off",
+        session_id=client_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        t3_url=t3_url,
+        aborted=aborted,
+        bound=True,
+        model=f"{instance_id}/{model_slug}",
+    )
 
 
 @router.post("/sessions/{session_id}/message", response_model=TaskResult)

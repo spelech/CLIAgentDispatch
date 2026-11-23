@@ -113,3 +113,147 @@ async def test_openai_chat_completions_incremental_streaming(async_client):
         assert '{"role": "assistant", "content": "!"}' in text
         assert '"finish_reason": "stop"' in text
         assert "data: [DONE]" in text
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_completions_x_session_affinity_reuses_thread(async_client):
+    async def mock_stream_turn1(task_req: TaskRequest):
+        assert task_req.session_id is None
+        yield StreamChunk(delta="", session_id="t3-thread-affinity-1")
+        yield StreamChunk(
+            delta="First answer",
+            is_final=True,
+            session_id="t3-thread-affinity-1",
+            finish_reason="stop",
+        )
+
+    async def mock_stream_turn2(task_req: TaskRequest):
+        assert task_req.session_id == "t3-thread-affinity-1"
+        assert task_req.prompt == "Follow-up question in same Slack thread"
+        assert task_req.system_prompt is None
+        yield StreamChunk(delta="", session_id="t3-thread-affinity-1")
+        yield StreamChunk(
+            delta="Second answer",
+            is_final=True,
+            session_id="t3-thread-affinity-1",
+            finish_reason="stop",
+        )
+
+    calls = [0]
+
+    def dispatch_stream_side_effect(task_req: TaskRequest):
+        idx = calls[0]
+        calls[0] += 1
+        return mock_stream_turn1(task_req) if idx == 0 else mock_stream_turn2(task_req)
+
+    with patch(
+        "cli_agent_dispatch.api.openai_routes.engine.dispatch_stream",
+        side_effect=dispatch_stream_side_effect,
+    ):
+        headers = {"x-session-affinity": "openclaw-slack-thread-uuid-1"}
+        resp1 = await async_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "t3",
+                "messages": [
+                    {"role": "system", "content": "System instructions"},
+                    {"role": "user", "content": "Initial Slack thread prompt"},
+                ],
+                "stream": True,
+            },
+            headers=headers,
+        )
+        assert resp1.status_code == 200
+        assert resp1.headers.get("x-session-id") == "openclaw-slack-thread-uuid-1"
+
+        resp2 = await async_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "t3",
+                "messages": [
+                    {"role": "system", "content": "System instructions"},
+                    {"role": "user", "content": "Initial Slack thread prompt"},
+                    {"role": "assistant", "content": "First answer"},
+                    {"role": "user", "content": "Follow-up question in same Slack thread"},
+                ],
+                "stream": True,
+            },
+            headers=headers,
+        )
+        assert resp2.status_code == 200
+        assert "Second answer" in resp2.text
+
+
+@pytest.mark.asyncio
+async def test_openai_resumed_turn_preserves_user_prompt_before_internal_context_and_fallback(
+    async_client,
+):
+    await session_store.get_or_create(
+        client_id="openclaw-slack-thread-archived",
+        executor_type="t3",  # type: ignore[arg-type]
+        native_session_id="mcp:archived-thread-999",
+    )
+
+    captured_reqs: list[TaskRequest] = []
+
+    async def mock_stream(task_req: TaskRequest):
+        captured_reqs.append(task_req)
+        yield StreamChunk(delta="", session_id="mcp:replacement-thread-1")
+        yield StreamChunk(
+            delta="Recovered full context",
+            is_final=True,
+            session_id="mcp:replacement-thread-1",
+            finish_reason="stop",
+        )
+
+    with patch(
+        "cli_agent_dispatch.api.openai_routes.engine.dispatch_stream",
+        side_effect=mock_stream,
+    ):
+        payload = {
+            "model": "t3",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a personal assistant running inside OpenClaw.",
+                },
+                {"role": "user", "content": "Review my Molly messages"},
+                {"role": "assistant", "content": "Her interest level is high."},
+                {"role": "user", "content": "Trying to work in the Formula 1 lego photo"},
+                {
+                    "role": "user",
+                    "content": (
+                        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n"
+                        "Active exec sessions:\nnone\n"
+                        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"
+                    ),
+                },
+            ],
+            "stream": True,
+        }
+        resp = await async_client.post(
+            "/v1/chat/completions",
+            json=payload,
+            headers={"x-session-id": "openclaw-slack-thread-archived"},
+        )
+        assert resp.status_code == 200
+        assert "Recovered full context" in resp.text
+
+    assert len(captured_reqs) == 1
+    req = captured_reqs[0]
+    assert req.session_id == "mcp:archived-thread-999"
+    # Delta prompt must include BOTH the user message AND trailing internal context
+    assert "Trying to work in the Formula 1 lego photo" in req.prompt
+    assert "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>" in req.prompt
+    assert req.system_prompt is None
+    # Fallback prompt & system prompt must retain the full conversation history
+    assert req.fallback_system_prompt == "You are a personal assistant running inside OpenClaw."
+    assert req.fallback_prompt is not None
+    assert "Review my Molly messages" in req.fallback_prompt
+    assert "Her interest level is high." in req.fallback_prompt
+    assert "Trying to work in the Formula 1 lego photo" in req.fallback_prompt
+
+    # Session store should now point to the replacement T3 thread
+    updated = await session_store.get("openclaw-slack-thread-archived")
+    assert updated is not None
+    assert updated.native_session_id == "mcp:replacement-thread-1"

@@ -175,3 +175,52 @@ async def test_anthropic_messages_streaming_with_reasoning_and_effort(async_clie
         assert "All tests passed." in text
         assert len(captured_reqs) == 1
         assert captured_reqs[0].effort == "max"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_resumed_turn_preserves_all_trailing_user_messages_and_fallback(
+    async_client,
+):
+    await session_store.get_or_create(
+        client_id="openclaw-anth-thread-2",
+        executor_type="t3",  # type: ignore
+        native_session_id="mcp:anth-archived-1",
+    )
+
+    mock_result = TaskResult(
+        success=True,
+        executor="t3",
+        output="Continuity preserved",
+        session_id="mcp:anth-replacement-2",
+        duration_seconds=0.1,
+    )
+
+    with patch(
+        "cli_agent_dispatch.api.anthropic_routes.engine.dispatch", new_callable=AsyncMock
+    ) as mock_dispatch:
+        mock_dispatch.return_value = mock_result
+
+        payload = {
+            "model": "t3",
+            "system": "System instructions",
+            "messages": [
+                {"role": "user", "content": "Initial message"},
+                {"role": "assistant", "content": "Initial reply"},
+                {"role": "user", "content": "Actual follow-up prompt"},
+                {
+                    "role": "user",
+                    "content": "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nActive exec: none\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+                },
+            ],
+            "metadata": {"session_id": "openclaw-anth-thread-2"},
+        }
+        resp = await async_client.post("/v1/messages", json=payload)
+        assert resp.status_code == 200
+
+        call_args: TaskRequest = mock_dispatch.call_args[0][0]
+        assert "Actual follow-up prompt" in call_args.prompt
+        assert "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>" in call_args.prompt
+        assert call_args.fallback_system_prompt == "System instructions"
+        assert call_args.fallback_prompt is not None
+        assert "Initial message" in call_args.fallback_prompt
+        assert "Initial reply" in call_args.fallback_prompt

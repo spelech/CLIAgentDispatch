@@ -65,6 +65,7 @@ async def reap_expired_ephemeral_sessions_loop(interval_seconds: float = 1800) -
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} v{settings.app_version} on port {settings.port}")
+    session_store.attach_db(settings.session_db_path)
     reaper_task = asyncio.create_task(reap_expired_ephemeral_sessions_loop())
     try:
         yield

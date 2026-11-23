@@ -44,3 +44,9 @@ def test_cli_run_failure():
         assert res.exit_code == 1
         assert "Execution Failed: Execution timed out" in res.output
         assert "Partial output" in res.output
+
+
+def test_default_timeout_raised_for_long_agentic_flows():
+    from cli_agent_dispatch.config import Settings
+
+    assert Settings().default_timeout == 900

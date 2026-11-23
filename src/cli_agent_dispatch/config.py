@@ -34,8 +34,10 @@ class Settings(BaseSettings):
     t3_server_url: str = Field(default="http://127.0.0.1:3773", alias="T3_SERVER_URL")
     t3_cli_path: str = Field(default=os.path.expanduser("~/.local/bin/t3"), alias="T3_CLI_PATH")
     t3_ui_url: str = Field(default="https://ttt.wileyriley.com", alias="T3_UI_URL")
+    t3_lan_url: str = Field(default="http://10.0.0.10:3773", alias="T3_LAN_URL")
+    t3_tailscale_url: str = Field(default="http://100.64.0.1:3773", alias="T3_TAILSCALE_URL")
     t3_default_provider: str = Field(default="antigravity", alias="T3_DEFAULT_PROVIDER")
-    t3_default_model: str = Field(default="gemini-3.8-flash-high", alias="T3_DEFAULT_MODEL")
+    t3_default_model: str = Field(default="gemini-4-hydrogen", alias="T3_DEFAULT_MODEL")
     t3_token_cache_path: str = Field(
         default=os.path.expanduser("~/.t3/userdata/secrets/cli_agent_dispatch_mcp_token.json"),
         alias="T3_TOKEN_CACHE_PATH",
@@ -47,8 +49,9 @@ class Settings(BaseSettings):
     ntfy_pass: str = Field(default="topfire89", alias="NTFY_PASS")
 
     # Execution Defaults
-    default_timeout: int = Field(default=180, alias="DEFAULT_TIMEOUT")
+    default_timeout: int = Field(default=900, alias="DEFAULT_TIMEOUT")
     default_workspace: str = Field(default="/containers", alias="DEFAULT_WORKSPACE")
+    session_db_path: str = Field(default="sessions.db", alias="SESSION_DB_PATH")
     cors_origins: list[str] = ["*"]
 
 

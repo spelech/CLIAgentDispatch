@@ -83,7 +83,21 @@ def _format_anthropic_prompt(messages: list[AnthropicMessage]) -> str:
 
 
 def _extract_anthropic_delta_turn(messages: list[AnthropicMessage]) -> str:
-    """Extract latest user turn message for active multi-turn sessions."""
+    """Extract latest delta turn for active multi-turn sessions."""
+    last_assistant_idx = -1
+    for idx in range(len(messages) - 1, -1, -1):
+        if messages[idx].role.lower() == "assistant":
+            last_assistant_idx = idx
+            break
+    tail = [m for m in messages[last_assistant_idx + 1 :] if m.role.lower() != "system"]
+    if tail:
+        if len(tail) == 1 and tail[0].role.lower() == "user":
+            return _extract_text_content(tail[0].content)
+        if all(m.role.lower() == "user" for m in tail):
+            parts = [_extract_text_content(m.content) for m in tail]
+            parts = [p for p in parts if p]
+            return "\n\n".join(parts) if parts else _extract_text_content(tail[-1].content)
+        return _format_anthropic_prompt(tail)
     for msg in reversed(messages):
         if msg.role.lower() == "user":
             return _extract_text_content(msg.content)
@@ -262,10 +276,14 @@ async def create_anthropic_message(
             is_resumed_turn = True
 
     if is_resumed_turn:
+        fallback_system_prompt = system_text
+        fallback_prompt = _format_anthropic_prompt(request.messages)
         prompt_text = _extract_anthropic_delta_turn(request.messages)
         system_text = None
     else:
         prompt_text = _format_anthropic_prompt(request.messages)
+        fallback_prompt = None
+        fallback_system_prompt = None
 
     task_req = TaskRequest(
         prompt=prompt_text,
@@ -274,6 +292,8 @@ async def create_anthropic_message(
         executor=exec_type,
         model=model_override,
         effort=_extract_anthropic_effort(request),
+        fallback_prompt=fallback_prompt,
+        fallback_system_prompt=fallback_system_prompt,
     )
 
     message_id = f"msg_{uuid.uuid4().hex[:12]}"
