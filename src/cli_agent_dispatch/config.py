@@ -48,6 +48,16 @@ class Settings(BaseSettings):
     ntfy_user: str = Field(default="steve", alias="NTFY_USER")
     ntfy_pass: str = Field(default="topfire89", alias="NTFY_PASS")
 
+    # LiteLLM Live Model Sync Configuration
+    litellm_sync_enabled: bool = Field(default=True, alias="LITELLM_SYNC_ENABLED")
+    litellm_base_url: str = Field(default="http://10.0.0.10:8448", alias="LITELLM_BASE_URL")
+    litellm_master_key: str | None = Field(default=None, alias="LITELLM_MASTER_KEY")
+    litellm_env_file: str = Field(default="/containers/ai/litellm/.env", alias="LITELLM_ENV_FILE")
+    litellm_sync_interval_seconds: int = Field(default=3600, alias="LITELLM_SYNC_INTERVAL_SECONDS")
+    cad_public_api_base: str = Field(
+        default="http://10.0.0.10:8032/v1", alias="CAD_PUBLIC_API_BASE"
+    )
+
     # Execution Defaults
     default_timeout: int = Field(default=900, alias="DEFAULT_TIMEOUT")
     default_workspace: str = Field(default="/containers", alias="DEFAULT_WORKSPACE")

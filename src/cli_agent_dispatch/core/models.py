@@ -441,11 +441,38 @@ class ModelCard(BaseModel):
     object: str = "model"
     created: int = 1700000000
     owned_by: str = "cli-agent-dispatch"
+    reasoning_effort_levels: list[str] | None = None
+    default_reasoning_effort: str | None = None
 
 
 class ModelListResponse(BaseModel):
     object: str = "list"
     data: list[ModelCard]
+
+
+class AgyBaseModelSpec(BaseModel):
+    base_slug: str
+    litellm_model_name: str
+    display_name: str
+    reasoning_effort_levels: list[str] = Field(default_factory=list)
+    default_reasoning_effort: str | None = None
+    tier_display_names: dict[str, str] = Field(default_factory=dict)
+    brand: str = "antigravity"
+    max_input_tokens: int = 131072
+    max_output_tokens: int = 32768
+    supports_video: bool = False
+
+
+class LiteLLMSyncResult(BaseModel):
+    status: str
+    synced_at: str
+    from_live_cli: bool = False
+    created: list[str] = Field(default_factory=list)
+    updated: list[str] = Field(default_factory=list)
+    deleted: list[str] = Field(default_factory=list)
+    unchanged: list[str] = Field(default_factory=list)
+    skipped_conflicts: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
 
 
 # --- Anthropic Messages Compatibility Schemas ---

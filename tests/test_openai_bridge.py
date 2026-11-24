@@ -27,34 +27,46 @@ async def test_list_models(async_client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["object"] == "list"
-    ids = [m["id"] for m in data["data"]]
-    assert "opencode" in ids
-    assert "agy" in ids
-    assert "agy-argon" in ids
-    assert "agy-argon-high" in ids
-    assert "agy-argon-low" in ids
-    assert "agy-opus" in ids
-    assert "agy-sonnet" in ids
-    assert "gemini-4-argon-medium" in ids
-    assert "Gemini 4 Argon (Medium)" in ids
-    assert "claude-opus-5-5-high" in ids
+    cards_by_id = {m["id"]: m for m in data["data"]}
+    assert "opencode" in cards_by_id
+    assert "agy" in cards_by_id
+    assert "agy-hydrogen" in cards_by_id
+    assert "agy-neon" in cards_by_id
+    assert "agy-carbon" in cards_by_id
+    assert "agy-argon" in cards_by_id
+    assert "agy-opus" in cards_by_id
+    assert "agy-sonnet" in cards_by_id
+    assert "agy-flash" in cards_by_id
+    assert cards_by_id["agy-hydrogen"]["reasoning_effort_levels"] == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    ]
+    assert cards_by_id["agy-hydrogen"]["default_reasoning_effort"] == "medium"
+    # Tier-suffixed clutter must not be advertised in /v1/models
+    assert "agy-argon-high" not in cards_by_id
+    assert "agy-argon-low" not in cards_by_id
+    assert "agy-hydrogen-high" not in cards_by_id
+    assert "t3-agy-argon-high" not in cards_by_id
+    assert "reasoning_effort_levels" not in cards_by_id["opencode"]
 
 
 def test_resolve_executor_and_model_argon():
     from cli_agent_dispatch.api.openai_routes import _resolve_executor_and_model
     from cli_agent_dispatch.core.models import ExecutorType
 
-    assert _resolve_executor_and_model("gemini-4-argon-medium") == (
+    assert _resolve_executor_and_model("agy-argon") == (
         ExecutorType.AGY,
-        "gemini-4-argon-medium",
+        "agy-argon",
     )
-    assert _resolve_executor_and_model("agy-argon-high") == (
+    assert _resolve_executor_and_model("agy-gemini-5-titanium") == (
         ExecutorType.AGY,
-        "agy-argon-high",
+        "agy-gemini-5-titanium",
     )
-    assert _resolve_executor_and_model("openai/gemini-4-argon-low") == (
+    assert _resolve_executor_and_model("openai/agy-hydrogen") == (
         ExecutorType.AGY,
-        "gemini-4-argon-low",
+        "agy-hydrogen",
     )
     assert _resolve_executor_and_model("opencode") == (
         ExecutorType.OPENCODE,
