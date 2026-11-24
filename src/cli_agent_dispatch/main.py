@@ -11,7 +11,8 @@ from cli_agent_dispatch.api.openai_routes import router as openai_router
 from cli_agent_dispatch.api.session_routes import router as session_router
 from cli_agent_dispatch.api.t3_pair_routes import router as t3_pair_router
 from cli_agent_dispatch.config import settings
-from cli_agent_dispatch.core.models import ExecutorType
+from cli_agent_dispatch.core.litellm_sync import litellm_sync_service
+from cli_agent_dispatch.core.models import ExecutorType, LiteLLMSyncResult
 from cli_agent_dispatch.core.session_store import session_store
 from cli_agent_dispatch.infrastructure.taps import diagnostic_buffer
 from cli_agent_dispatch.mcp.server import mcp_server
@@ -62,19 +63,46 @@ async def reap_expired_ephemeral_sessions_loop(interval_seconds: float = 1800) -
             logger.error(f"Unexpected error in ephemeral reaper loop: {e}", exc_info=True)
 
 
+async def litellm_sync_loop(interval_seconds: float | None = None) -> None:
+    """Background task syncing discovered AGY base models into LiteLLM on startup and periodically."""
+    interval = (
+        interval_seconds
+        if interval_seconds is not None
+        else max(60, settings.litellm_sync_interval_seconds)
+    )
+    if not settings.litellm_sync_enabled:
+        logger.info("LiteLLM auto-sync disabled via LITELLM_SYNC_ENABLED=false.")
+        return
+    while True:
+        try:
+            await litellm_sync_service.sync_once(force_refresh=True)
+        except asyncio.CancelledError:
+            logger.info("LiteLLM sync task cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Unexpected error in LiteLLM sync loop: {e}", exc_info=True)
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            logger.info("LiteLLM sync task cancelled.")
+            break
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} v{settings.app_version} on port {settings.port}")
     session_store.attach_db(settings.session_db_path)
     reaper_task = asyncio.create_task(reap_expired_ephemeral_sessions_loop())
+    sync_task = asyncio.create_task(litellm_sync_loop())
     try:
         yield
     finally:
-        reaper_task.cancel()
-        try:
-            await reaper_task
-        except asyncio.CancelledError:
-            pass
+        for task in (reaper_task, sync_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         logger.info(f"Shutting down {settings.app_name}")
 
 
@@ -121,8 +149,15 @@ async def health_check():
     }
 
 
+@app.post("/api/litellm/sync", response_model=LiteLLMSyncResult, tags=["LiteLLM Sync"])
+async def trigger_litellm_sync(force_refresh: bool = True) -> LiteLLMSyncResult:
+    """Trigger an immediate AGY base-model sync into LiteLLM."""
+    return await litellm_sync_service.sync_once(force_refresh=force_refresh)
+
+
 @app.get("/api/diagnostics", tags=["Diagnostics"])
 async def get_diagnostics(limit: int = 50):
     return {
         "events": diagnostic_buffer.get_events(limit=limit),
+        "litellm_sync": litellm_sync_service.status_snapshot(),
     }

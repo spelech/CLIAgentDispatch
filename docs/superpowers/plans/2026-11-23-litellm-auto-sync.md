@@ -140,10 +140,7 @@ def test_normalize_agy_model_uses_explicit_effort_for_known_and_future_models():
             agy_mod.normalize_agy_model("agy-hydrogen", explicit_effort="low")
             == "Gemini 4 Hydrogen (Low)"
         )
-        assert (
-            agy_mod.normalize_agy_model("agy-hydrogen")
-            == "Gemini 4 Hydrogen (Medium)"
-        )
+        assert agy_mod.normalize_agy_model("agy-hydrogen") == "Gemini 4 Hydrogen (Medium)"
         assert (
             agy_mod.normalize_agy_model("agy-opus", explicit_effort="low")
             == "Claude Opus 5.5 (Low)"
@@ -156,10 +153,7 @@ def test_normalize_agy_model_uses_explicit_effort_for_known_and_future_models():
             agy_mod.normalize_agy_model("agy-gemini-5-titanium", explicit_effort="low")
             == "Gemini 5 Titanium (Low)"
         )
-        assert (
-            agy_mod.normalize_agy_model("agy-gemini-5-titanium")
-            == "Gemini 5 Titanium (High)"
-        )
+        assert agy_mod.normalize_agy_model("agy-gemini-5-titanium") == "Gemini 5 Titanium (High)"
         # Requested effort higher than available falls back to highest available tier
         assert (
             agy_mod.normalize_agy_model("agy-argon", explicit_effort="xhigh")
@@ -695,19 +689,13 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'cli_agent_dispatch.co
 Add fields to `Settings` in `src/cli_agent_dispatch/config.py`:
 
 ```python
-    # LiteLLM Live Model Sync Configuration
-    litellm_sync_enabled: bool = Field(default=True, alias="LITELLM_SYNC_ENABLED")
-    litellm_base_url: str = Field(default="http://10.0.0.10:8448", alias="LITELLM_BASE_URL")
-    litellm_master_key: str | None = Field(default=None, alias="LITELLM_MASTER_KEY")
-    litellm_env_file: str = Field(
-        default="/containers/ai/litellm/.env", alias="LITELLM_ENV_FILE"
-    )
-    litellm_sync_interval_seconds: int = Field(
-        default=3600, alias="LITELLM_SYNC_INTERVAL_SECONDS"
-    )
-    cad_public_api_base: str = Field(
-        default="http://10.0.0.10:8032/v1", alias="CAD_PUBLIC_API_BASE"
-    )
+# LiteLLM Live Model Sync Configuration
+litellm_sync_enabled: bool = Field(default=True, alias="LITELLM_SYNC_ENABLED")
+litellm_base_url: str = Field(default="http://10.0.0.10:8448", alias="LITELLM_BASE_URL")
+litellm_master_key: str | None = Field(default=None, alias="LITELLM_MASTER_KEY")
+litellm_env_file: str = Field(default="/containers/ai/litellm/.env", alias="LITELLM_ENV_FILE")
+litellm_sync_interval_seconds: int = Field(default=3600, alias="LITELLM_SYNC_INTERVAL_SECONDS")
+cad_public_api_base: str = Field(default="http://10.0.0.10:8032/v1", alias="CAD_PUBLIC_API_BASE")
 ```
 
 - [ ] **Step 4: Implement `src/cli_agent_dispatch/core/litellm_sync.py`**

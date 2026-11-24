@@ -274,3 +274,31 @@ async def test_sync_handles_missing_key_and_http_errors_gracefully(monkeypatch, 
 
     assert res_err.status == "error"
     assert res_err.errors
+
+
+@pytest.mark.asyncio
+async def test_api_litellm_sync_endpoint_and_diagnostics(async_client):
+    from cli_agent_dispatch.core.models import LiteLLMSyncResult
+
+    fake_res = LiteLLMSyncResult(
+        status="success",
+        synced_at="2026-11-23T23:30:00Z",
+        from_live_cli=True,
+        created=["agy-hydrogen"],
+        unchanged=["agy"],
+    )
+    with patch(
+        "cli_agent_dispatch.main.litellm_sync_service.sync_once",
+        new_callable=AsyncMock,
+        return_value=fake_res,
+    ) as mock_sync:
+        resp = await async_client.post("/api/litellm/sync?force_refresh=true")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        assert body["created"] == ["agy-hydrogen"]
+        mock_sync.assert_awaited_once_with(force_refresh=True)
+
+    diag = await async_client.get("/api/diagnostics")
+    assert diag.status_code == 200
+    assert "litellm_sync" in diag.json()
