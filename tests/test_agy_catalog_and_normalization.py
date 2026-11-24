@@ -110,7 +110,11 @@ def test_normalize_agy_model_uses_explicit_effort_for_known_and_future_models():
 def test_discover_agy_models_with_status_tracks_live_vs_fallback():
     mock_ok = MagicMock()
     mock_ok.returncode = 0
-    mock_ok.stdout = "gemini-5-titanium-high  Gemini 5 Titanium (High)\n"
+    # Real `agy models` non-TTY stdout is single-tab delimited; TTY output uses 2+ spaces
+    mock_ok.stdout = (
+        "gemini-5-titanium-high\tGemini 5 Titanium (High)\n"
+        "gemini-5-titanium-low   Gemini 5 Titanium (Low)\n"
+    )
     with (
         patch.object(agy_mod, "_resolve_agy_binary", return_value="/usr/bin/agy"),
         patch("subprocess.run", return_value=mock_ok),
@@ -118,6 +122,7 @@ def test_discover_agy_models_with_status_tracks_live_vs_fallback():
         models, from_live = agy_mod.discover_agy_models_with_status(force_refresh=True)
         assert from_live is True
         assert models["gemini-5-titanium-high"] == "Gemini 5 Titanium (High)"
+        assert models["gemini-5-titanium-low"] == "Gemini 5 Titanium (Low)"
         assert "gemini-4-argon-low" not in models
 
     with (

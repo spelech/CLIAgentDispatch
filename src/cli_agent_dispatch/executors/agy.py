@@ -70,7 +70,7 @@ _HIGH_DEFAULT_BASE_SLUGS: set[str] = {
 }
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07")
-_MODEL_LINE_RE = re.compile(r"^([a-zA-Z0-9][a-zA-Z0-9._-]*)\s{2,}(.+)$")
+_MODEL_LINE_RE = re.compile(r"^([a-zA-Z0-9][a-zA-Z0-9._-]*)(?:\t+|\s{2,})(.+)$")
 _SESSION_KEY_RE = re.compile(r"\bsession=([^\s|]+)")
 _SLACK_CHANNEL_RE = re.compile(r"\b(?:channel_id|slack_channel)=([CDG][A-Z0-9]{8,})\b")
 _AGY_MODELS_CACHE: dict[str, str] | None = None
