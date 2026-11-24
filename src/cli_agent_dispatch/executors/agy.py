@@ -12,7 +12,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from cli_agent_dispatch.config import settings
-from cli_agent_dispatch.core.models import StreamChunk, TaskRequest, TaskResult
+from cli_agent_dispatch.core.models import AgyBaseModelSpec, StreamChunk, TaskRequest, TaskResult
 from cli_agent_dispatch.core.session_store import session_store
 from cli_agent_dispatch.executors.base import BaseExecutor
 
@@ -45,11 +45,36 @@ DEFAULT_AGY_MODELS: dict[str, str] = {
     "gpt-oss-120b-medium": "GPT-OSS 120B (Medium)",
 }
 
+_TIER_ORDER: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+_TIER_SUFFIX_RE = re.compile(r"^(?P<base>.+)-(?P<tier>low|medium|high|xhigh|max)$", re.IGNORECASE)
+_DISPLAY_TIER_RE = re.compile(r"\s*\((low|medium|high|xhigh|max)\)\s*$", re.IGNORECASE)
+
+KNOWN_AGY_LITELLM_NAMES: dict[str, str] = {
+    "gemini-4-hydrogen": "agy-hydrogen",
+    "gemini-4-neon": "agy-neon",
+    "gemini-4-carbon": "agy-carbon",
+    "gemini-4-argon": "agy-argon",
+    "gemini-3.8-flash": "agy-flash",
+    "claude-opus-5-5": "agy-opus",
+    "claude-sonnet-5-5": "agy-sonnet",
+    "gpt-oss-120b": "agy-gpt-oss",
+    "gemini-pro-orchestrator-neon": "agy-orchestrator-neon",
+    "gemini-pro-orchestrator": "agy-orchestrator-carbon",
+    "gemini-pro-orchestrator-argon": "agy-orchestrator-argon",
+}
+
+_HIGH_DEFAULT_BASE_SLUGS: set[str] = {
+    "gemini-3.8-flash",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+}
+
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07")
 _MODEL_LINE_RE = re.compile(r"^([a-zA-Z0-9][a-zA-Z0-9._-]*)\s{2,}(.+)$")
 _SESSION_KEY_RE = re.compile(r"\bsession=([^\s|]+)")
 _SLACK_CHANNEL_RE = re.compile(r"\b(?:channel_id|slack_channel)=([CDG][A-Z0-9]{8,})\b")
 _AGY_MODELS_CACHE: dict[str, str] | None = None
+_AGY_MODELS_CACHE_LIVE: bool = False
 _AGY_MODELS_CACHE_TS: float = 0.0
 _AGY_MODELS_CACHE_TTL: float = 3600.0
 
@@ -109,9 +134,13 @@ def _parse_agy_models_output(raw_output: str) -> dict[str, str]:
     return parsed
 
 
-def discover_agy_models(force_refresh: bool = False) -> dict[str, str]:
-    """Discover available agy models via `agy models` with 3600s cache and fallback."""
-    global _AGY_MODELS_CACHE, _AGY_MODELS_CACHE_TS
+def discover_agy_models_with_status(force_refresh: bool = False) -> tuple[dict[str, str], bool]:
+    """Discover available agy models via `agy models` with 3600s cache and live/fallback status.
+
+    Returns `(models, from_live_cli)`. When `from_live_cli` is True, `models` contains
+    only the live entries parsed from `agy models` so retired models are detected.
+    """
+    global _AGY_MODELS_CACHE, _AGY_MODELS_CACHE_LIVE, _AGY_MODELS_CACHE_TS
 
     now = time.monotonic()
     if (
@@ -119,8 +148,9 @@ def discover_agy_models(force_refresh: bool = False) -> dict[str, str]:
         and _AGY_MODELS_CACHE is not None
         and (now - _AGY_MODELS_CACHE_TS) < _AGY_MODELS_CACHE_TTL
     ):
-        return dict(_AGY_MODELS_CACHE)
+        return dict(_AGY_MODELS_CACHE), _AGY_MODELS_CACHE_LIVE
 
+    from_live_cli = False
     models: dict[str, str] = dict(DEFAULT_AGY_MODELS)
     agy_bin = _resolve_agy_binary()
     if agy_bin:
@@ -140,18 +170,148 @@ def discover_agy_models(force_refresh: bool = False) -> dict[str, str]:
             if proc.returncode == 0 and proc.stdout:
                 discovered = _parse_agy_models_output(proc.stdout)
                 if discovered:
-                    models.update(discovered)
+                    models = dict(discovered)
+                    from_live_cli = True
         except Exception:
             pass
 
     _AGY_MODELS_CACHE = dict(models)
+    _AGY_MODELS_CACHE_LIVE = from_live_cli
     _AGY_MODELS_CACHE_TS = now
-    return dict(models)
+    return dict(models), from_live_cli
 
 
-def normalize_agy_model(model: str | None) -> str:
-    """Normalize incoming model alias or ID to canonical agy model Display Name."""
+def discover_agy_models(force_refresh: bool = False) -> dict[str, str]:
+    """Discover available agy models via `agy models`, merged with default fallback entries."""
+    live_or_default, from_live = discover_agy_models_with_status(force_refresh=force_refresh)
+    if from_live:
+        merged = dict(DEFAULT_AGY_MODELS)
+        merged.update(live_or_default)
+        return merged
+    return live_or_default
+
+
+def _infer_family_metadata(base_slug: str) -> tuple[str, int, int, bool]:
+    low = base_slug.lower()
+    if "gemini" in low:
+        return ("google", 1048576, 65536, True)
+    if "claude" in low:
+        return ("anthropic", 200000, 65536, False)
+    if "gpt" in low:
+        return ("openai", 131072, 32768, False)
+    return ("antigravity", 131072, 32768, False)
+
+
+def _split_model_tier(model_id: str) -> tuple[str, str | None]:
+    match = _TIER_SUFFIX_RE.match(model_id.strip())
+    if match:
+        return match.group("base"), match.group("tier").lower()
+    return model_id.strip(), None
+
+
+def build_agy_model_catalog(
+    discovered: dict[str, str] | None = None,
+    include_default_alias: bool = True,
+) -> list[AgyBaseModelSpec]:
+    """Collapse discovered `agy models` entries into base-model specs with exact effort tiers."""
+    source = discovered if discovered is not None else discover_agy_models_with_status()[0]
+
+    grouped_tiers: dict[str, dict[str, str]] = {}
+    base_display: dict[str, str] = {}
+    order: list[str] = []
+
+    for model_id, display_name in source.items():
+        base_slug, tier = _split_model_tier(model_id)
+        if base_slug not in grouped_tiers:
+            grouped_tiers[base_slug] = {}
+            order.append(base_slug)
+        if tier:
+            grouped_tiers[base_slug][tier] = display_name
+        clean_display = _DISPLAY_TIER_RE.sub("", display_name).strip() or display_name.strip()
+        if base_slug not in base_display:
+            base_display[base_slug] = clean_display
+
+    specs: list[AgyBaseModelSpec] = []
+    for base_slug in order:
+        tier_map = grouped_tiers[base_slug]
+        levels = [t for t in _TIER_ORDER if t in tier_map]
+        if base_slug.lower() in _HIGH_DEFAULT_BASE_SLUGS and "high" in levels:
+            default_effort: str | None = "high"
+        elif "medium" in levels:
+            default_effort = "medium"
+        elif "high" in levels:
+            default_effort = "high"
+        elif levels:
+            default_effort = levels[0]
+        else:
+            default_effort = None
+
+        brand, max_in, max_out, supports_video = _infer_family_metadata(base_slug)
+        litellm_name = KNOWN_AGY_LITELLM_NAMES.get(base_slug, f"agy-{base_slug}")
+        specs.append(
+            AgyBaseModelSpec(
+                base_slug=base_slug,
+                litellm_model_name=litellm_name,
+                display_name=base_display[base_slug],
+                reasoning_effort_levels=levels,
+                default_reasoning_effort=default_effort,
+                tier_display_names=tier_map,
+                brand=brand,
+                max_input_tokens=max_in,
+                max_output_tokens=max_out,
+                supports_video=supports_video,
+            )
+        )
+
+    if include_default_alias and specs:
+        default_clean = _DISPLAY_TIER_RE.sub("", settings.agy_default_model).strip().lower()
+        default_spec = next(
+            (s for s in specs if s.display_name.lower() == default_clean),
+            None,
+        )
+        if default_spec is None:
+            default_spec = next(
+                (s for s in specs if s.litellm_model_name == "agy-flash"),
+                specs[0],
+            )
+        specs.insert(0, default_spec.model_copy(update={"litellm_model_name": "agy"}))
+
+    return specs
+
+
+def _pick_tier_display_name(spec: AgyBaseModelSpec, desired_effort: str | None) -> str:
+    if desired_effort and desired_effort in spec.tier_display_names:
+        return spec.tier_display_names[desired_effort]
+    if desired_effort in ("max", "xhigh"):
+        for fallback_tier in ("xhigh", "high", "medium", "low"):
+            if fallback_tier in spec.tier_display_names:
+                return spec.tier_display_names[fallback_tier]
+    if desired_effort == "high":
+        for fallback_tier in ("high", "medium", "low"):
+            if fallback_tier in spec.tier_display_names:
+                return spec.tier_display_names[fallback_tier]
+    if desired_effort == "low":
+        for fallback_tier in ("low", "medium", "high"):
+            if fallback_tier in spec.tier_display_names:
+                return spec.tier_display_names[fallback_tier]
+    if spec.default_reasoning_effort and spec.default_reasoning_effort in spec.tier_display_names:
+        return spec.tier_display_names[spec.default_reasoning_effort]
+    if spec.tier_display_names:
+        return next(iter(spec.tier_display_names.values()))
+    return spec.display_name
+
+
+def normalize_agy_model(model: str | None, explicit_effort: str | None = None) -> str:
+    """Normalize incoming model alias or ID + optional effort to canonical agy Display Name."""
+    discovered = discover_agy_models()
+    catalog = build_agy_model_catalog(discovered=discovered, include_default_alias=True)
+    resolved_effort = resolve_agy_effort(model, explicit_effort)
+
     if not model:
+        if resolved_effort:
+            default_spec = next((s for s in catalog if s.litellm_model_name == "agy"), None)
+            if default_spec:
+                return _pick_tier_display_name(default_spec, resolved_effort)
         return settings.agy_default_model
 
     raw = model.strip()
@@ -165,56 +325,87 @@ def normalize_agy_model(model: str | None) -> str:
 
     m = raw.lower()
     if m in ["agy", "default", "auto", "agy-gemini"]:
+        if resolved_effort:
+            default_spec = next((s for s in catalog if s.litellm_model_name == "agy"), None)
+            if default_spec:
+                return _pick_tier_display_name(default_spec, resolved_effort)
         return settings.agy_default_model
 
-    discovered = discover_agy_models()
+    # Exact catalog base-model match (supports known friendly names AND dynamically discovered future models)
+    for spec in catalog:
+        if spec.litellm_model_name == "agy":
+            continue
+        if m in (
+            spec.litellm_model_name.lower(),
+            spec.base_slug.lower(),
+            f"agy-{spec.base_slug.lower()}",
+        ):
+            return _pick_tier_display_name(spec, resolved_effort)
+
+    # Exact discovered model_id or display_name match
     for model_id, display_name in discovered.items():
         if m == model_id.lower() or m == display_name.lower():
+            if explicit_effort and resolved_effort:
+                base_slug, _ = _split_model_tier(model_id)
+                parent = next(
+                    (
+                        s
+                        for s in catalog
+                        if s.litellm_model_name != "agy" and s.base_slug == base_slug
+                    ),
+                    None,
+                )
+                if parent:
+                    return _pick_tier_display_name(parent, resolved_effort)
             return display_name
 
     if "neon" in m:
-        if "xhigh" in m or "max" in m:
+        if resolved_effort in ("xhigh", "max") or "xhigh" in m or "max" in m:
             return "Gemini 4 Neon (XHigh)"
-        if "high" in m:
+        if resolved_effort == "high" or "high" in m:
             return "Gemini 4 Neon (High)"
-        if "low" in m:
+        if resolved_effort == "low" or "low" in m:
             return "Gemini 4 Neon (Low)"
         return "Gemini 4 Neon (Medium)"
 
     if "carbon" in m:
-        if "high" in m or "max" in m:
+        if resolved_effort in ("high", "xhigh", "max") or "high" in m or "max" in m:
             return "Gemini 4 Carbon (High)"
-        if "low" in m:
+        if resolved_effort == "low" or "low" in m:
             return "Gemini 4 Carbon (Low)"
         return "Gemini 4 Carbon (Medium)"
 
     if "hydrogen" in m:
-        if "xhigh" in m or "max" in m:
+        if resolved_effort in ("xhigh", "max") or "xhigh" in m or "max" in m:
             return "Gemini 4 Hydrogen (XHigh)"
-        if "high" in m:
+        if resolved_effort == "high" or "high" in m:
             return "Gemini 4 Hydrogen (High)"
-        if "low" in m:
+        if resolved_effort == "low" or "low" in m:
             return "Gemini 4 Hydrogen (Low)"
         return "Gemini 4 Hydrogen (Medium)"
 
     if "argon" in m:
-        if "high" in m or "max" in m:
+        if resolved_effort in ("high", "xhigh", "max") or "high" in m or "max" in m:
             return "Gemini 4 Argon (High)"
-        if "low" in m:
+        if resolved_effort == "low" or "low" in m:
             return "Gemini 4 Argon (Low)"
         return "Gemini 4 Argon (Medium)"
 
     if "opus" in m:
-        if m == "agy-opus" or "high" in m or "max" in m:
+        if resolved_effort in ("high", "xhigh", "max") or (
+            not resolved_effort and (m == "agy-opus" or "high" in m or "max" in m)
+        ):
             return "Claude Opus 5.5 (High)"
-        if "low" in m:
+        if resolved_effort == "low" or "low" in m:
             return "Claude Opus 5.5 (Low)"
         return "Claude Opus 5.5 (Medium)"
 
     if "sonnet" in m or "claude" in m:
-        if m == "agy-sonnet" or "high" in m or "max" in m:
+        if resolved_effort in ("high", "xhigh", "max") or (
+            not resolved_effort and (m == "agy-sonnet" or "high" in m or "max" in m)
+        ):
             return "Claude Sonnet 5.5 (High)"
-        if "low" in m:
+        if resolved_effort == "low" or "low" in m:
             return "Claude Sonnet 5.5 (Low)"
         return "Claude Sonnet 5.5 (Medium)"
 
@@ -222,9 +413,9 @@ def normalize_agy_model(model: str | None) -> str:
         return "GPT-OSS 120B (Medium)"
 
     if "gemini" in m or "flash" in m:
-        if "low" in m:
+        if resolved_effort == "low" or "low" in m:
             return "Gemini 3.8 Flash (Low)"
-        if "high" in m or "max" in m:
+        if resolved_effort in ("high", "xhigh", "max") or "high" in m or "max" in m:
             return "Gemini 3.8 Flash (High)"
         return "Gemini 3.8 Flash (Medium)"
 
@@ -718,7 +909,7 @@ class AgyExecutor(BaseExecutor):
     async def execute(self, request: TaskRequest) -> TaskResult:
         start_time = time.perf_counter()
         timeout = request.timeout or settings.default_timeout
-        model = normalize_agy_model(request.model)
+        model = normalize_agy_model(request.model, explicit_effort=request.effort)
         workspace = request.workspace or settings.default_workspace
         agy_path = settings.agy_path
 
@@ -886,7 +1077,7 @@ class AgyExecutor(BaseExecutor):
 
     async def execute_stream(self, request: TaskRequest) -> AsyncGenerator[StreamChunk, None]:
         timeout = request.timeout or settings.default_timeout
-        model = normalize_agy_model(request.model)
+        model = normalize_agy_model(request.model, explicit_effort=request.effort)
         workspace = request.workspace or settings.default_workspace
         agy_path = settings.agy_path
 
