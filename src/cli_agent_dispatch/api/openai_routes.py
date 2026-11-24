@@ -21,7 +21,7 @@ from cli_agent_dispatch.core.models import (
     TaskRequest,
 )
 from cli_agent_dispatch.core.session_store import session_store
-from cli_agent_dispatch.executors.agy import discover_agy_models
+from cli_agent_dispatch.executors.agy import build_agy_model_catalog, discover_agy_models
 from cli_agent_dispatch.executors.t3 import (
     T3_STATIC_ALIASES,
     discover_t3_models,
@@ -34,32 +34,6 @@ STATIC_MODEL_ALIASES = [
     "opencode",
     "opencode-default",
     "opencode-small",
-    "agy",
-    "agy-argon",
-    "agy-argon-high",
-    "agy-argon-xhigh",
-    "agy-argon-max",
-    "agy-argon-low",
-    "agy-hydrogen",
-    "agy-hydrogen-low",
-    "agy-hydrogen-medium",
-    "agy-hydrogen-high",
-    "agy-hydrogen-xhigh",
-    "agy-neon",
-    "agy-carbon",
-    "agy-opus",
-    "agy-opus-medium",
-    "agy-opus-xhigh",
-    "agy-opus-max",
-    "agy-sonnet",
-    "agy-sonnet-medium",
-    "agy-flash",
-    "agy-gemini",
-    "agy-claude",
-    "gemini-3.8-flash",
-    "claude-sonnet-5.5",
-    "claude-opus-5.5",
-    "gpt-oss-120b",
     *T3_STATIC_ALIASES,
 ]
 
@@ -70,17 +44,31 @@ def _build_available_models() -> list[ModelCard]:
     seen: set[str] = set()
     cards: list[ModelCard] = []
 
-    def _add(model_id: str) -> None:
+    def _add(
+        model_id: str,
+        *,
+        reasoning_effort_levels: list[str] | None = None,
+        default_reasoning_effort: str | None = None,
+    ) -> None:
         if model_id and model_id not in seen:
             seen.add(model_id)
-            cards.append(ModelCard(id=model_id))
+            cards.append(
+                ModelCard(
+                    id=model_id,
+                    reasoning_effort_levels=reasoning_effort_levels or None,
+                    default_reasoning_effort=default_reasoning_effort,
+                )
+            )
 
-    for alias in STATIC_MODEL_ALIASES:
+    for alias in ("opencode", "opencode-default", "opencode-small"):
         _add(alias)
 
-    for model_id, display_name in discover_agy_models().items():
-        _add(model_id)
-        _add(display_name)
+    for spec in build_agy_model_catalog():
+        _add(
+            spec.litellm_model_name,
+            reasoning_effort_levels=spec.reasoning_effort_levels,
+            default_reasoning_effort=spec.default_reasoning_effort,
+        )
 
     for t3_model in discover_t3_models():
         _add(t3_model)
@@ -88,7 +76,7 @@ def _build_available_models() -> list[ModelCard]:
     return cards
 
 
-@router.get("/models", response_model=ModelListResponse)
+@router.get("/models", response_model=ModelListResponse, response_model_exclude_none=True)
 async def list_models() -> ModelListResponse:
     """List available local agent models for OpenAI-compatible clients."""
     return ModelListResponse(data=_build_available_models())
@@ -109,6 +97,9 @@ def _resolve_executor_and_model(model_name: str) -> tuple[ExecutorType, str | No
     discovered_keys = {k.lower() for k in discovered.keys()} | {
         v.lower() for v in discovered.values()
     }
+    for spec in build_agy_model_catalog(discovered=discovered, include_default_alias=False):
+        discovered_keys.add(spec.base_slug.lower())
+        discovered_keys.add(spec.litellm_model_name.lower())
 
     if (
         name_lower in discovered_keys
